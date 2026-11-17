@@ -65,6 +65,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [route, setRoute] = useState<RouteState>(readRoute)
   const [toasts, setToasts] = useState<ToastItem[]>([])
   const stateRef = useRef<AppState>(state)
+  const pendingRef = useRef(0)
   const timers = useRef<number[]>([])
 
   const dismissToast = useCallback((id: string) => {
@@ -90,14 +91,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const send = useCallback(
     async (url: string, method: string, body?: unknown) => {
+      pendingRef.current += 1
       try {
         await apiRequest(url, method, body)
       } catch {
         notify('数据同步失败，请检查网络后重试', 'warn')
+      } finally {
+        pendingRef.current -= 1
       }
     },
     [notify],
   )
+
+  const refresh = useCallback(async () => {
+    if (pendingRef.current > 0) return
+    try {
+      const res = await apiRequest('/api/state', 'GET')
+      const data = (await res.json()) as AppState
+      if (pendingRef.current > 0) return
+      stateRef.current = data
+      setState(data)
+    } catch {
+      /* keep current data when offline */
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -132,6 +149,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (!window.location.hash) window.history.replaceState(null, '', '#/dashboard')
     return () => window.removeEventListener('hashchange', sync)
   }, [])
+
+  useEffect(() => {
+    if (!ready) return
+    const timer = window.setInterval(() => {
+      void refresh()
+    }, 15000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [ready, refresh])
 
   useEffect(() => () => timers.current.forEach((t) => window.clearTimeout(t)), [])
 
