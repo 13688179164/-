@@ -145,7 +145,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 function Shell() {
-  const { route } = useStore()
+  const { route, ready } = useStore()
   const [mobileOpen, setMobileOpen] = useState(false)
 
   const page = useMemo(() => {
@@ -162,6 +162,19 @@ function Shell() {
         return <Dashboard />
     }
   }, [route.page])
+
+  if (!ready) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-paper">
+        <div className="flex flex-col items-center gap-4">
+          <div className="grid h-12 w-12 animate-pulse place-items-center rounded-2xl bg-gradient-to-br from-[#4d78ff] to-[#2246c9] text-[19px] font-semibold text-white shadow-[0_12px_30px_-12px_rgba(77,120,255,.9)]">
+            合
+          </div>
+          <p className="text-[12.5px] tracking-[0.16em] text-ink-3">正在连接数据服务…</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-paper">

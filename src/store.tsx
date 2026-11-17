@@ -3,8 +3,6 @@ import type { AppState, Meeting, Minutes, PageKey, Supervision, ToastItem } from
 import { seedState } from './data'
 import { uid } from './lib/utils'
 
-const STORAGE_KEY = 'heyi.platform.v2'
-
 interface RouteState {
   page: PageKey
   meetingId?: string
@@ -14,6 +12,7 @@ interface RouteState {
 
 interface StoreValue {
   state: AppState
+  ready: boolean
   route: RouteState
   navigate: (page: PageKey, opts?: { meetingId?: string; supervisionId?: string; newMeeting?: boolean }) => void
   toasts: ToastItem[]
@@ -36,19 +35,6 @@ interface StoreValue {
 
 const StoreContext = createContext<StoreValue | null>(null)
 
-function loadState(): AppState {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as AppState
-      if (parsed && Array.isArray(parsed.meetings) && Array.isArray(parsed.people)) return parsed
-    }
-  } catch {
-    /* ignore corrupt storage */
-  }
-  return seedState()
-}
-
 function readRoute(): RouteState {
   const hash = window.location.hash.replace(/^#\/?/, '')
   if (!hash) return { page: 'dashboard' }
@@ -63,19 +49,82 @@ function readRoute(): RouteState {
   }
 }
 
+async function apiRequest(url: string, method: string, body?: unknown) {
+  const res = await fetch(url, {
+    method,
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res
+}
+
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AppState>(loadState)
+  const [state, setState] = useState<AppState>(seedState)
+  const [ready, setReady] = useState(false)
   const [route, setRoute] = useState<RouteState>(readRoute)
   const [toasts, setToasts] = useState<ToastItem[]>([])
+  const stateRef = useRef<AppState>(state)
   const timers = useRef<number[]>([])
 
+  const dismissToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id))
+  }, [])
+
+  const notify = useCallback(
+    (message: string, tone: ToastItem['tone'] = 'success') => {
+      const id = uid('toast')
+      setToasts((prev) => [...prev.slice(-2), { id, message, tone }])
+      const timer = window.setTimeout(() => dismissToast(id), 3800)
+      timers.current.push(timer)
+    },
+    [dismissToast],
+  )
+
+  const apply = useCallback((updater: (s: AppState) => AppState) => {
+    const next = updater(stateRef.current)
+    stateRef.current = next
+    setState(next)
+    return next
+  }, [])
+
+  const send = useCallback(
+    async (url: string, method: string, body?: unknown) => {
+      try {
+        await apiRequest(url, method, body)
+      } catch {
+        notify('数据同步失败，请检查网络后重试', 'warn')
+      }
+    },
+    [notify],
+  )
+
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-    } catch {
-      /* storage may be full */
+    let cancelled = false
+    async function init() {
+      try {
+        const res = await apiRequest('/api/state', 'GET')
+        let data = (await res.json()) as AppState
+        if (!data.people?.length) {
+          const seed = seedState()
+          await apiRequest('/api/bootstrap', 'POST', seed)
+          data = seed
+        }
+        if (cancelled) return
+        stateRef.current = data
+        setState(data)
+        setReady(true)
+      } catch {
+        if (cancelled) return
+        setReady(true)
+        notify('无法连接数据库，当前展示本地演示数据', 'warn')
+      }
     }
-  }, [state])
+    init()
+    return () => {
+      cancelled = true
+    }
+  }, [notify])
 
   useEffect(() => {
     const sync = () => setRoute(readRoute())
@@ -105,80 +154,94 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [])
 
-  const dismissToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id))
-  }, [])
-
-  const notify = useCallback(
-    (message: string, tone: ToastItem['tone'] = 'success') => {
-      const id = uid('toast')
-      setToasts((prev) => [...prev.slice(-2), { id, message, tone }])
-      const timer = window.setTimeout(() => dismissToast(id), 3800)
-      timers.current.push(timer)
+  const addMeeting = useCallback(
+    (input: Omit<Meeting, 'id' | 'createdAt'>) => {
+      const meeting: Meeting = { ...input, id: uid('m'), createdAt: Date.now() }
+      apply((s) => ({ ...s, meetings: [meeting, ...s.meetings] }))
+      void send('/api/meetings', 'POST', meeting)
+      return meeting
     },
-    [dismissToast],
+    [apply, send],
   )
 
-  const addMeeting = useCallback((input: Omit<Meeting, 'id' | 'createdAt'>) => {
-    const meeting: Meeting = { ...input, id: uid('m'), createdAt: Date.now() }
-    setState((s) => ({ ...s, meetings: [meeting, ...s.meetings] }))
-    return meeting
-  }, [])
+  const updateMeeting = useCallback(
+    (id: string, patch: Partial<Meeting>) => {
+      apply((s) => ({ ...s, meetings: s.meetings.map((m) => (m.id === id ? { ...m, ...patch } : m)) }))
+      void send(`/api/meetings/${id}`, 'PATCH', patch)
+    },
+    [apply, send],
+  )
 
-  const updateMeeting = useCallback((id: string, patch: Partial<Meeting>) => {
-    setState((s) => ({ ...s, meetings: s.meetings.map((m) => (m.id === id ? { ...m, ...patch } : m)) }))
-  }, [])
+  const deleteMeeting = useCallback(
+    (id: string) => {
+      apply((s) => ({
+        ...s,
+        meetings: s.meetings.filter((m) => m.id !== id),
+        minutes: s.minutes.filter((mi) => mi.meetingId !== id),
+      }))
+      void send(`/api/meetings/${id}`, 'DELETE')
+    },
+    [apply, send],
+  )
 
-  const deleteMeeting = useCallback((id: string) => {
-    setState((s) => ({
-      ...s,
-      meetings: s.meetings.filter((m) => m.id !== id),
-      minutes: s.minutes.filter((mi) => mi.meetingId !== id),
-    }))
-  }, [])
-
-  const saveMinutes = useCallback((m: Minutes) => {
-    setState((s) => {
-      const exists = s.minutes.some((mi) => mi.id === m.id)
-      return {
+  const saveMinutes = useCallback(
+    (m: Minutes) => {
+      const exists = stateRef.current.minutes.some((mi) => mi.id === m.id)
+      apply((s) => ({
         ...s,
         minutes: exists ? s.minutes.map((mi) => (mi.id === m.id ? m : mi)) : [m, ...s.minutes],
-      }
-    })
-  }, [])
+      }))
+      void send(`/api/minutes/${m.id}`, 'PUT', m)
+    },
+    [apply, send],
+  )
 
-  const updateMinutes = useCallback((id: string, patch: Partial<Minutes>) => {
-    setState((s) => ({ ...s, minutes: s.minutes.map((mi) => (mi.id === id ? { ...mi, ...patch } : mi)) }))
-  }, [])
+  const updateMinutes = useCallback(
+    (id: string, patch: Partial<Minutes>) => {
+      apply((s) => ({ ...s, minutes: s.minutes.map((mi) => (mi.id === id ? { ...mi, ...patch } : mi)) }))
+      void send(`/api/minutes/${id}`, 'PATCH', patch)
+    },
+    [apply, send],
+  )
 
-  const toggleAction = useCallback((minutesId: string, actionId: string) => {
-    setState((s) => ({
-      ...s,
-      minutes: s.minutes.map((mi) =>
-        mi.id === minutesId
-          ? { ...mi, actions: mi.actions.map((a) => (a.id === actionId ? { ...a, done: !a.done } : a)) }
-          : mi,
-      ),
-    }))
-  }, [])
+  const toggleAction = useCallback(
+    (minutesId: string, actionId: string) => {
+      const next = apply((s) => ({
+        ...s,
+        minutes: s.minutes.map((mi) =>
+          mi.id === minutesId
+            ? { ...mi, actions: mi.actions.map((a) => (a.id === actionId ? { ...a, done: !a.done } : a)) }
+            : mi,
+        ),
+      }))
+      const target = next.minutes.find((mi) => mi.id === minutesId)
+      if (target) void send(`/api/minutes/${minutesId}`, 'PATCH', { actions: target.actions })
+    },
+    [apply, send],
+  )
 
   const markCloud = useCallback(
     (minutesId: string) => {
       const at = Date.now()
-      setState((s) => ({
+      apply((s) => ({
         ...s,
         minutes: s.minutes.map((mi) =>
           mi.id === minutesId ? { ...mi, savedToCloud: true, savedAt: at } : mi,
         ),
       }))
+      void send(`/api/minutes/${minutesId}`, 'PATCH', { savedToCloud: true, savedAt: at })
       return at
     },
-    [],
+    [apply, send],
   )
 
-  const deleteMinutes = useCallback((id: string) => {
-    setState((s) => ({ ...s, minutes: s.minutes.filter((mi) => mi.id !== id) }))
-  }, [])
+  const deleteMinutes = useCallback(
+    (id: string) => {
+      apply((s) => ({ ...s, minutes: s.minutes.filter((mi) => mi.id !== id) }))
+      void send(`/api/minutes/${id}`, 'DELETE')
+    },
+    [apply, send],
+  )
 
   const addSupervision = useCallback(
     (input: Omit<Supervision, 'id' | 'createdAt' | 'status' | 'completedAt'>) => {
@@ -188,51 +251,80 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         createdAt: Date.now(),
         status: 'active',
       }
-      setState((s) => ({ ...s, supervisions: [supervision, ...s.supervisions] }))
+      apply((s) => ({ ...s, supervisions: [supervision, ...s.supervisions] }))
+      void send('/api/supervisions', 'POST', supervision)
       return supervision
     },
-    [],
+    [apply, send],
   )
 
-  const toggleGoal = useCallback((id: string, goalId: string) => {
-    setState((s) => ({
-      ...s,
-      supervisions: s.supervisions.map((sv) => {
-        if (sv.id !== id) return sv
-        const goals = sv.goals.map((g) =>
-          g.id === goalId ? { ...g, done: !g.done, doneAt: !g.done ? Date.now() : undefined } : g,
-        )
-        const allDone = goals.length > 0 && goals.every((g) => g.done)
-        return {
-          ...sv,
-          goals,
-          status: allDone ? 'done' : 'active',
-          completedAt: allDone ? Date.now() : undefined,
-        }
-      }),
-    }))
-  }, [])
+  const toggleGoal = useCallback(
+    (id: string, goalId: string) => {
+      const next = apply((s) => ({
+        ...s,
+        supervisions: s.supervisions.map((sv) => {
+          if (sv.id !== id) return sv
+          const goals = sv.goals.map((g) =>
+            g.id === goalId ? { ...g, done: !g.done, doneAt: !g.done ? Date.now() : undefined } : g,
+          )
+          const allDone = goals.length > 0 && goals.every((g) => g.done)
+          return {
+            ...sv,
+            goals,
+            status: allDone ? 'done' : 'active',
+            completedAt: allDone ? Date.now() : undefined,
+          }
+        }),
+      }))
+      const target = next.supervisions.find((sv) => sv.id === id)
+      if (target) {
+        void send(`/api/supervisions/${id}`, 'PATCH', {
+          goals: target.goals,
+          status: target.status,
+          completedAt: target.completedAt ?? null,
+        })
+      }
+    },
+    [apply, send],
+  )
 
-  const markReminded = useCallback((id: string) => {
-    setState((s) => ({
-      ...s,
-      supervisions: s.supervisions.map((sv) =>
-        sv.id === id ? { ...sv, reminder: true, reminded: true, remindedAt: Date.now() } : sv,
-      ),
-    }))
-  }, [])
+  const markReminded = useCallback(
+    (id: string) => {
+      const at = Date.now()
+      apply((s) => ({
+        ...s,
+        supervisions: s.supervisions.map((sv) =>
+          sv.id === id ? { ...sv, reminder: true, reminded: true, remindedAt: at } : sv,
+        ),
+      }))
+      void send(`/api/supervisions/${id}`, 'PATCH', { reminder: true, reminded: true, remindedAt: at })
+    },
+    [apply, send],
+  )
 
-  const updateSupervision = useCallback((id: string, patch: Partial<Supervision>) => {
-    setState((s) => ({ ...s, supervisions: s.supervisions.map((sv) => (sv.id === id ? { ...sv, ...patch } : sv)) }))
-  }, [])
+  const updateSupervision = useCallback(
+    (id: string, patch: Partial<Supervision>) => {
+      apply((s) => ({
+        ...s,
+        supervisions: s.supervisions.map((sv) => (sv.id === id ? { ...sv, ...patch } : sv)),
+      }))
+      void send(`/api/supervisions/${id}`, 'PATCH', patch)
+    },
+    [apply, send],
+  )
 
-  const deleteSupervision = useCallback((id: string) => {
-    setState((s) => ({ ...s, supervisions: s.supervisions.filter((sv) => sv.id !== id) }))
-  }, [])
+  const deleteSupervision = useCallback(
+    (id: string) => {
+      apply((s) => ({ ...s, supervisions: s.supervisions.filter((sv) => sv.id !== id) }))
+      void send(`/api/supervisions/${id}`, 'DELETE')
+    },
+    [apply, send],
+  )
 
   const value = useMemo<StoreValue>(
     () => ({
       state,
+      ready,
       route,
       navigate,
       toasts,
@@ -254,6 +346,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       state,
+      ready,
       route,
       navigate,
       toasts,
