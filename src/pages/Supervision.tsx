@@ -11,6 +11,7 @@ import {
   Minus,
   Plus,
   Search,
+  Star,
   Target,
   Trash2,
   TrendingUp,
@@ -42,7 +43,7 @@ interface SupForm {
   dueDate: string
   goals: string[]
   reminder: boolean
-  priority: 'high' | 'normal'
+  priority: 'high' | 'normal' | 'focus'
 }
 
 const blankForm = (): SupForm => ({
@@ -270,7 +271,11 @@ export default function SupervisionPage() {
               const owners = state.people.filter((p) => s.ownerIds.includes(p.id))
               const remaining = daysBetween(todayKey(), s.dueDate)
               return (
-                <article key={s.id} className="card card-hover flex flex-col p-5">
+                <article
+                  key={s.id}
+                  className="card card-hover flex flex-col p-5"
+                  style={s.priority === 'focus' ? { backgroundColor: '#fdf1f5', borderColor: '#f3cfdd' } : undefined}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -278,6 +283,11 @@ export default function SupervisionPage() {
                           <span className="h-1.5 w-1.5 rounded-full bg-brand" /> 进行中
                         </span>
                         <h3 className="text-[14.5px] font-semibold text-ink">{s.title}</h3>
+                        {s.priority === 'focus' && (
+                          <span className="inline-flex items-center gap-0.5 rounded-full bg-[#fbe3ee] px-1.5 py-0.5 text-[10px] font-medium text-[#b6456a]">
+                            <Star size={10} /> 重点关注
+                          </span>
+                        )}
                         {s.priority === 'high' && (
                           <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-amber">
                             <Flag size={10} /> 重点
@@ -322,7 +332,12 @@ export default function SupervisionPage() {
                     </span>
                   </div>
 
-                  <div className="mt-4 rounded-xl border border-line/80 bg-[#fafbfd] p-3.5">
+                  <div
+                    className={cn(
+                      'mt-4 rounded-xl border p-3.5',
+                      s.priority === 'focus' ? 'border-[#f3cfdd]/70 bg-white/70' : 'border-line/80 bg-[#fafbfd]',
+                    )}
+                  >
                     <div className="mb-2 flex items-end justify-between">
                       <div className="flex items-baseline gap-1.5">
                         <span className="num font-display text-[22px] leading-none font-semibold text-ink">{pct}%</span>
@@ -417,6 +432,11 @@ export default function SupervisionPage() {
                             <span className="chip flex-none bg-teal-soft text-teal">
                               <Check size={10} strokeWidth={3} /> 已完成
                             </span>
+                            {s.priority === 'focus' && (
+                              <span className="chip flex-none bg-[#fbe3ee] text-[#b6456a]">
+                                <Star size={10} /> 重点关注
+                              </span>
+                            )}
                             <span className="truncate">{s.title}</span>
                           </p>
                           <p className="mt-1 line-clamp-1 pl-0.5 text-[10.5px] text-faint">
@@ -660,7 +680,7 @@ export default function SupervisionPage() {
 
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
-              {(['normal', 'high'] as const).map((p) => (
+              {(['normal', 'high', 'focus'] as const).map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -668,12 +688,15 @@ export default function SupervisionPage() {
                   className={cn(
                     'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11.5px] transition',
                     form.priority === p
-                      ? 'border-brand/40 bg-brand-soft font-medium text-brand'
+                      ? p === 'focus'
+                        ? 'border-[#e9b8cb] bg-[#fbe3ee] font-medium text-[#b6456a]'
+                        : 'border-brand/40 bg-brand-soft font-medium text-brand'
                       : 'border-line text-muted hover:text-ink',
                   )}
                 >
                   {p === 'high' && <Flag size={11} />}
-                  {p === 'high' ? '重点督办' : '常规督办'}
+                  {p === 'focus' && <Star size={11} />}
+                  {p === 'high' ? '重点督办' : p === 'focus' ? '重点关注' : '常规督办'}
                 </button>
               ))}
             </div>

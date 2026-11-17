@@ -18,12 +18,10 @@ import { AvatarGroup, Badge, EmptyState, PageHeader } from '../components/ui'
 import { cn } from '../lib/utils'
 
 const TYPE_TONE: Record<MeetingType, { pill: string; dot: string; tone: 'brand' | 'teal' | 'violet' | 'amber' | 'rose' | 'blue' }> = {
-  评审会: { pill: 'bg-brand-soft text-brand', dot: 'bg-brand', tone: 'brand' },
-  周会: { pill: 'bg-teal-soft text-teal', dot: 'bg-teal', tone: 'teal' },
-  专题会: { pill: 'bg-[#f1ecff] text-[#6b46d0]', dot: 'bg-[#7c5ce0]', tone: 'violet' },
-  客户会: { pill: 'bg-amber-soft text-[#9a6a0e]', dot: 'bg-amber', tone: 'amber' },
-  复盘会: { pill: 'bg-[#fdecee] text-[#c0434f]', dot: 'bg-[#d95a66]', tone: 'rose' },
-  战略会: { pill: 'bg-[#e7f0fe] text-[#2f66c9]', dot: 'bg-[#3d78d8]', tone: 'blue' },
+  俱乐部月会: { pill: 'bg-brand-soft text-brand', dot: 'bg-brand', tone: 'brand' },
+  商务部月会: { pill: 'bg-teal-soft text-teal', dot: 'bg-teal', tone: 'teal' },
+  门店月会: { pill: 'bg-[#f1ecff] text-[#6b46d0]', dot: 'bg-[#7c5ce0]', tone: 'violet' },
+  '2027年战略地图': { pill: 'bg-[#e7f0fe] text-[#2f66c9]', dot: 'bg-[#3d78d8]', tone: 'blue' },
 }
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日']

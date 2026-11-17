@@ -8,7 +8,7 @@ export interface Person {
   tone: string
 }
 
-export type MeetingType = '评审会' | '周会' | '专题会' | '客户会' | '复盘会' | '战略会'
+export type MeetingType = '俱乐部月会' | '商务部月会' | '门店月会' | '2027年战略地图'
 
 export interface Meeting {
   id: string
@@ -70,7 +70,7 @@ export interface Supervision {
   reminded: boolean
   remindedAt?: number
   status: 'active' | 'done'
-  priority: 'high' | 'normal'
+  priority: 'high' | 'normal' | 'focus'
   createdAt: number
   completedAt?: number
 }

@@ -453,7 +453,7 @@ function normalizeRows(rows, defaults) {
 const MEETING_DEFAULTS = {
   id: null,
   title: '',
-  type: '周会',
+  type: '俱乐部月会',
   date: '',
   start: '09:00',
   end: '10:00',

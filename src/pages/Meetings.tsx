@@ -28,21 +28,19 @@ import {
 import { Avatar, AvatarGroup, Badge, ConfirmDialog, EmptyState, Modal, PageHeader, Tabs } from '../components/ui'
 import { cn } from '../lib/utils'
 
-const TYPES: MeetingType[] = ['评审会', '周会', '专题会', '客户会', '复盘会', '战略会']
+const TYPES: MeetingType[] = ['俱乐部月会', '商务部月会', '门店月会', '2027年战略地图']
 
 const TYPE_STYLE: Record<MeetingType, { tone: 'brand' | 'teal' | 'amber' | 'violet' | 'rose' | 'blue'; tile: string }> = {
-  评审会: { tone: 'brand', tile: 'bg-brand-soft text-brand' },
-  周会: { tone: 'teal', tile: 'bg-teal-soft text-teal' },
-  专题会: { tone: 'violet', tile: 'bg-[#f1ecff] text-[#6b46d0]' },
-  客户会: { tone: 'amber', tile: 'bg-amber-soft text-[#9a6a0e]' },
-  复盘会: { tone: 'rose', tile: 'bg-[#fdecee] text-[#c0434f]' },
-  战略会: { tone: 'blue', tile: 'bg-[#e7f0fe] text-[#2f66c9]' },
+  俱乐部月会: { tone: 'brand', tile: 'bg-brand-soft text-brand' },
+  商务部月会: { tone: 'teal', tile: 'bg-teal-soft text-teal' },
+  门店月会: { tone: 'violet', tile: 'bg-[#f1ecff] text-[#6b46d0]' },
+  '2027年战略地图': { tone: 'blue', tile: 'bg-[#e7f0fe] text-[#2f66c9]' },
 }
 
 const STATUS_LABEL = { upcoming: '待开始', ongoing: '进行中', ended: '已结束' } as const
 const STATUS_WEIGHT = { ongoing: 0, upcoming: 1, ended: 2 } as const
 
-const LOCATION_SUGGEST = ['云杉厅 · 7F', '松涛厅 · 8F', '竹影会议室 · 6F', '线上会议 · 飞书', '客户现场']
+const LOCATION_SUGGEST = ['2911会议室', '古德車房休息室']
 
 interface FormState {
   title: string
@@ -59,11 +57,11 @@ interface FormState {
 function initialForm(initial?: Meeting | null): FormState {
   return {
     title: initial?.title ?? '',
-    type: initial?.type ?? '评审会',
+    type: initial?.type ?? '俱乐部月会',
     date: initial?.date ?? todayKey(),
     start: initial?.start ?? '10:00',
     end: initial?.end ?? '11:00',
-    location: initial?.location ?? '云杉厅 · 7F',
+    location: initial?.location ?? '2911会议室',
     participantIds: initial?.participantIds ?? ['p1'],
     content: initial?.content ?? '',
     priority: initial?.priority ?? 'normal',
@@ -262,7 +260,7 @@ function MeetingForm({
           <input
             id="m-location"
             className="field"
-            placeholder="会议室 / 线上会议 / 客户现场"
+            placeholder="2911会议室 / 古德車房休息室"
             value={form.location}
             onChange={(e) => setForm({ ...form, location: e.target.value })}
           />
@@ -445,7 +443,7 @@ export default function Meetings() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {list.map((m) => {
             const st = meetingState(m)
-            const style = TYPE_STYLE[m.type] ?? TYPE_STYLE['评审会']
+            const style = TYPE_STYLE[m.type] ?? TYPE_STYLE['俱乐部月会']
             const attendees = state.people.filter((p) => m.participantIds.includes(p.id))
             const hasMinutes = state.minutes.some((mi) => mi.meetingId === m.id)
             const [y, mo, da] = m.date.split('-')
