@@ -8,20 +8,25 @@ const { Pool } = pg
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = Number(process.env.PORT || 8787)
 const DATABASE_URL = process.env.DATABASE_URL || ''
+const CLOUDBASE_ENV_ID = process.env.CLOUDBASE_ENV_ID || ''
+const CLOUDBASE_API_KEY = process.env.CLOUDBASE_API_KEY || ''
+const USE_CLOUDBASE = Boolean(CLOUDBASE_ENV_ID && CLOUDBASE_API_KEY)
 
-if (!DATABASE_URL) {
-  console.error('[server] DATABASE_URL is required')
+if (!USE_CLOUDBASE && !DATABASE_URL) {
+  console.error('[server] either DATABASE_URL or CLOUDBASE_ENV_ID + CLOUDBASE_API_KEY is required')
   process.exit(1)
 }
 
 const needsSsl = /sslmode=(require|verify-ca|verify-full)/i.test(DATABASE_URL)
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
-  max: 8,
-})
+const pool = USE_CLOUDBASE
+  ? null
+  : new Pool({
+      connectionString: DATABASE_URL,
+      ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+      max: 8,
+    })
 
-const json = (v) => JSON.parse(JSON.stringify(v ?? null))
+/* ---------------------------------- postgres --------------------------------- */
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS people (
@@ -86,25 +91,6 @@ CREATE TABLE IF NOT EXISTS supervisions (
 CREATE INDEX IF NOT EXISTS meetings_date_idx ON meetings(date);
 CREATE INDEX IF NOT EXISTS minutes_meeting_idx ON minutes(meeting_id);
 `
-
-async function ensureSchema() {
-  await pool.query(SCHEMA)
-}
-
-const meetingSelect = `
-SELECT id, title, type, date, start_time, end_time, location, participant_ids,
-       content, organizer_id, priority, created_at
-FROM meetings`
-
-const minutesSelect = `
-SELECT id, meeting_id, title, created_at, duration_sec, transcript, summary,
-       topics, decisions, actions, risks, attendees, saved_to_cloud, saved_at, version
-FROM minutes`
-
-const supervisionSelect = `
-SELECT id, title, note, owner_ids, start_date, due_date, goals, reminder, reminded,
-       reminded_at, status, priority, created_at, completed_at
-FROM supervisions`
 
 const mapMeeting = (r) => ({
   id: r.id,
@@ -228,7 +214,7 @@ function buildPatch(patch, columnMap) {
   return { sets, values }
 }
 
-async function insertMeeting(client, m) {
+async function pgInsertMeeting(client, m) {
   const { rows } = await client.query(
     `INSERT INTO meetings (id, title, type, date, start_time, end_time, location,
        participant_ids, content, organizer_id, priority, created_at)
@@ -257,7 +243,7 @@ async function insertMeeting(client, m) {
   return mapMeeting(rows[0])
 }
 
-async function insertMinutes(client, m) {
+async function pgInsertMinutes(client, m) {
   const { rows } = await client.query(
     `INSERT INTO minutes (id, meeting_id, title, created_at, duration_sec, transcript, summary,
        topics, decisions, actions, risks, attendees, saved_to_cloud, saved_at, version)
@@ -290,7 +276,7 @@ async function insertMinutes(client, m) {
   return mapMinutes(rows[0])
 }
 
-async function insertSupervision(client, s) {
+async function pgInsertSupervision(client, s) {
   const { rows } = await client.query(
     `INSERT INTO supervisions (id, title, note, owner_ids, start_date, due_date, goals,
        reminder, reminded, reminded_at, status, priority, created_at, completed_at)
@@ -321,12 +307,12 @@ async function insertSupervision(client, s) {
   return mapSupervision(rows[0])
 }
 
-async function readState() {
+async function pgReadState() {
   const [people, meetings, minutes, supervisions] = await Promise.all([
     pool.query('SELECT id, name, role, org, tone FROM people ORDER BY sort_order ASC, id ASC'),
-    pool.query(`${meetingSelect} ORDER BY created_at DESC`),
-    pool.query(`${minutesSelect} ORDER BY created_at DESC`),
-    pool.query(`${supervisionSelect} ORDER BY created_at DESC`),
+    pool.query('SELECT * FROM meetings ORDER BY created_at DESC'),
+    pool.query('SELECT * FROM minutes ORDER BY created_at DESC'),
+    pool.query('SELECT * FROM supervisions ORDER BY created_at DESC'),
   ])
   return {
     people: people.rows.map((r) => ({ id: r.id, name: r.name, role: r.role, org: r.org, tone: r.tone })),
@@ -336,32 +322,33 @@ async function readState() {
   }
 }
 
-const app = express()
-app.disable('x-powered-by')
-app.use(express.json({ limit: '8mb' }))
+async function pgPatch(table, columnMap, id, patch) {
+  const { sets, values } = buildPatch(patch, columnMap)
+  if (!sets.length) return null
+  const { rows } = await pool.query(
+    `UPDATE ${table} SET ${sets.join(', ')} WHERE id = $${values.length + 1} RETURNING *`,
+    [...values, id],
+  )
+  return rows[0] || null
+}
 
-const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
-
-app.get('/api/health', asyncRoute(async (_req, res) => {
-  await pool.query('SELECT 1')
-  res.json({ ok: true })
-}))
-
-app.get('/api/state', asyncRoute(async (_req, res) => {
-  res.json(await readState())
-}))
-
-app.post('/api/bootstrap', asyncRoute(async (req, res) => {
-  const snapshot = req.body
-  if (!snapshot || !Array.isArray(snapshot.people) || !Array.isArray(snapshot.meetings)) {
-    return res.status(400).json({ error: 'invalid bootstrap payload' })
-  }
-  const client = await pool.connect()
-  try {
-    await client.query('BEGIN')
-    const { rows } = await client.query('SELECT COUNT(*)::int AS n FROM people')
-    const hasPeople = rows[0].n > 0
-    if (!hasPeople) {
+const postgresBackend = {
+  async health() {
+    await pool.query('SELECT 1')
+  },
+  async ensureSchema() {
+    await pool.query(SCHEMA)
+  },
+  readState: pgReadState,
+  async bootstrap(snapshot) {
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query('SELECT COUNT(*)::int AS n FROM people')
+      if (rows[0].n > 0) {
+        await client.query('COMMIT')
+        return false
+      }
       for (let i = 0; i < snapshot.people.length; i += 1) {
         const p = snapshot.people[i]
         await client.query(
@@ -369,102 +356,350 @@ app.post('/api/bootstrap', asyncRoute(async (req, res) => {
           [p.id, p.name, p.role, p.org, p.tone, i],
         )
       }
-      for (const m of snapshot.meetings || []) await insertMeeting(client, m)
-      for (const m of snapshot.minutes || []) await insertMinutes(client, m)
-      for (const s of snapshot.supervisions || []) await insertSupervision(client, s)
+      for (const m of snapshot.meetings || []) await pgInsertMeeting(client, m)
+      for (const m of snapshot.minutes || []) await pgInsertMinutes(client, m)
+      for (const s of snapshot.supervisions || []) await pgInsertSupervision(client, s)
+      await client.query('COMMIT')
+      return true
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
     }
-    await client.query('COMMIT')
-    res.status(hasPeople ? 200 : 201).json({ seeded: !hasPeople })
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {})
-    throw err
-  } finally {
-    client.release()
+  },
+  async createMeeting(m) {
+    const client = await pool.connect()
+    try {
+      return await pgInsertMeeting(client, m)
+    } finally {
+      client.release()
+    }
+  },
+  async patchMeeting(id, patch) {
+    const row = await pgPatch('meetings', meetingColumns, id, patch)
+    return row ? mapMeeting(row) : null
+  },
+  async deleteMeeting(id) {
+    await pool.query('DELETE FROM meetings WHERE id = $1', [id])
+  },
+  async upsertMinutes(m) {
+    const client = await pool.connect()
+    try {
+      return await pgInsertMinutes(client, m)
+    } finally {
+      client.release()
+    }
+  },
+  async patchMinutes(id, patch) {
+    const row = await pgPatch('minutes', minutesColumns, id, patch)
+    return row ? mapMinutes(row) : null
+  },
+  async deleteMinutes(id) {
+    await pool.query('DELETE FROM minutes WHERE id = $1', [id])
+  },
+  async createSupervision(s) {
+    const client = await pool.connect()
+    try {
+      return await pgInsertSupervision(client, s)
+    } finally {
+      client.release()
+    }
+  },
+  async patchSupervision(id, patch) {
+    const row = await pgPatch('supervisions', supervisionColumns, id, patch)
+    return row ? mapSupervision(row) : null
+  },
+  async deleteSupervision(id) {
+    await pool.query('DELETE FROM supervisions WHERE id = $1', [id])
+  },
+}
+
+/* -------------------------------- cloudbase --------------------------------- */
+
+const REST_BASE = `https://${CLOUDBASE_ENV_ID}.api.tcloudbasegateway.com/v1/rdb/rest`
+
+async function rest(pathname, { method = 'GET', body, prefer } = {}) {
+  const headers = {
+    Authorization: `Bearer ${CLOUDBASE_API_KEY}`,
+    apikey: CLOUDBASE_API_KEY,
   }
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (prefer) headers.Prefer = prefer
+  const res = await fetch(`${REST_BASE}/${pathname}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
+  })
+  const text = await res.text()
+  if (!res.ok) throw new Error(`CloudBase ${method} ${pathname} -> ${res.status} ${text.slice(0, 200)}`)
+  if (!text) return null
+  return JSON.parse(text)
+}
+
+const enc = encodeURIComponent
+
+function normalizeRows(rows, defaults) {
+  return (rows || []).map((row) => {
+    const out = {}
+    for (const [key, fallback] of Object.entries(defaults)) {
+      out[key] = row[key] === undefined ? fallback : row[key]
+    }
+    return out
+  })
+}
+
+const MEETING_DEFAULTS = {
+  id: null,
+  title: '',
+  type: '周会',
+  date: '',
+  start: '09:00',
+  end: '10:00',
+  location: '',
+  participantIds: [],
+  content: '',
+  organizerId: '',
+  priority: 'normal',
+  createdAt: null,
+}
+
+const MINUTES_DEFAULTS = {
+  id: null,
+  meetingId: null,
+  title: '',
+  createdAt: null,
+  durationSec: 0,
+  transcript: '',
+  summary: '',
+  topics: [],
+  decisions: [],
+  actions: [],
+  risks: [],
+  attendees: [],
+  savedToCloud: false,
+  savedAt: null,
+  version: 1,
+}
+
+const SUPERVISION_DEFAULTS = {
+  id: null,
+  title: '',
+  note: '',
+  ownerIds: [],
+  startDate: '',
+  dueDate: '',
+  goals: [],
+  reminder: false,
+  reminded: false,
+  remindedAt: null,
+  status: 'active',
+  priority: 'normal',
+  createdAt: null,
+  completedAt: null,
+}
+
+async function cbInsert(table, row) {
+  const rows = await rest(table, {
+    method: 'POST',
+    body: [row],
+    prefer: 'return=representation',
+  })
+  return rows?.[0] || null
+}
+
+async function cbPatch(table, id, patch) {
+  if (!Object.keys(patch).length) return null
+  const rows = await rest(`${table}?id=eq.${enc(id)}`, {
+    method: 'PATCH',
+    body: patch,
+    prefer: 'return=representation',
+  })
+  return rows?.[0] || null
+}
+
+const cloudbaseBackend = {
+  async health() {
+    await rest('people?select=id&limit=1')
+  },
+  async ensureSchema() {
+    /* tables are provisioned through the CloudBase CLI / console */
+  },
+  async readState() {
+    const [people, meetings, minutes, supervisions] = await Promise.all([
+      rest('people?select=id,name,role,org,tone&order=sortOrder.asc'),
+      rest('meetings?select=*&order=createdAt.desc'),
+      rest('minutes?select=*&order=createdAt.desc'),
+      rest('supervisions?select=*&order=createdAt.desc'),
+    ])
+    return {
+      people: people || [],
+      meetings: (meetings || []).map((r) => ({ ...r, createdAt: Number(r.createdAt) })),
+      minutes: (minutes || []).map((r) => ({
+        ...r,
+        createdAt: Number(r.createdAt),
+        savedAt: r.savedAt == null ? undefined : Number(r.savedAt),
+      })),
+      supervisions: (supervisions || []).map((r) => ({
+        ...r,
+        createdAt: Number(r.createdAt),
+        remindedAt: r.remindedAt == null ? undefined : Number(r.remindedAt),
+        completedAt: r.completedAt == null ? undefined : Number(r.completedAt),
+      })),
+    }
+  },
+  async bootstrap(snapshot) {
+    const existing = await rest('people?select=id&limit=1')
+    if (existing?.length) return false
+    const people = (snapshot.people || []).map((p, i) => ({
+      id: p.id,
+      name: p.name,
+      role: p.role,
+      org: p.org,
+      tone: p.tone,
+      sortOrder: i,
+    }))
+    if (people.length) await rest('people', { method: 'POST', body: people, prefer: 'return=minimal' })
+    const meetings = normalizeRows(snapshot.meetings, MEETING_DEFAULTS)
+    const minutes = normalizeRows(snapshot.minutes, MINUTES_DEFAULTS)
+    const supervisions = normalizeRows(snapshot.supervisions, SUPERVISION_DEFAULTS)
+    if (meetings.length) {
+      await rest('meetings', { method: 'POST', body: meetings, prefer: 'return=minimal' })
+    }
+    if (minutes.length) {
+      await rest('minutes', { method: 'POST', body: minutes, prefer: 'return=minimal' })
+    }
+    if (supervisions.length) {
+      await rest('supervisions', { method: 'POST', body: supervisions, prefer: 'return=minimal' })
+    }
+    return true
+  },
+  async createMeeting(m) {
+    return cbInsert('meetings', m)
+  },
+  async patchMeeting(id, patch) {
+    return cbPatch('meetings', id, patch)
+  },
+  async deleteMeeting(id) {
+    await rest(`meetings?id=eq.${enc(id)}`, { method: 'DELETE' })
+  },
+  async upsertMinutes(m) {
+    const rows = await rest('minutes?on_conflict=id', {
+      method: 'POST',
+      body: [m],
+      prefer: 'resolution=merge-duplicates,return=representation',
+    })
+    return rows?.[0] || null
+  },
+  async patchMinutes(id, patch) {
+    return cbPatch('minutes', id, patch)
+  },
+  async deleteMinutes(id) {
+    await rest(`minutes?id=eq.${enc(id)}`, { method: 'DELETE' })
+  },
+  async createSupervision(s) {
+    return cbInsert('supervisions', s)
+  },
+  async patchSupervision(id, patch) {
+    return cbPatch('supervisions', id, patch)
+  },
+  async deleteSupervision(id) {
+    await rest(`supervisions?id=eq.${enc(id)}`, { method: 'DELETE' })
+  },
+}
+
+const backend = USE_CLOUDBASE ? cloudbaseBackend : postgresBackend
+
+/* ----------------------------------- app ------------------------------------ */
+
+const app = express()
+app.disable('x-powered-by')
+app.use(express.json({ limit: '8mb' }))
+app.use('/app-api', (req, res, next) => {
+  const started = Date.now()
+  res.on('finish', () => {
+    console.log(`[api] ${req.method} ${req.originalUrl} -> ${res.statusCode} ${Date.now() - started}ms`)
+  })
+  next()
+})
+
+const asyncRoute = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
+
+app.get('/app-api/health', asyncRoute(async (_req, res) => {
+  await backend.health()
+  res.json({ ok: true, store: USE_CLOUDBASE ? 'cloudbase' : 'postgres' })
 }))
 
-app.post('/api/meetings', asyncRoute(async (req, res) => {
+app.get('/app-api/state', asyncRoute(async (_req, res) => {
+  const data = await backend.readState()
+  console.log(
+    `[state] people=${data.people.length} meetings=${data.meetings.length} minutes=${data.minutes.length} supervisions=${data.supervisions.length}`,
+  )
+  res.json(data)
+}))
+
+app.post('/app-api/bootstrap', asyncRoute(async (req, res) => {
+  const snapshot = req.body
+  if (!snapshot || !Array.isArray(snapshot.people) || !Array.isArray(snapshot.meetings)) {
+    return res.status(400).json({ error: 'invalid bootstrap payload' })
+  }
+  const seeded = await backend.bootstrap(snapshot)
+  res.status(seeded ? 201 : 200).json({ seeded })
+}))
+
+app.post('/app-api/meetings', asyncRoute(async (req, res) => {
   const m = req.body
   if (!m?.id || !m.title || !m.date) return res.status(400).json({ error: 'missing meeting fields' })
-  const client = await pool.connect()
-  try {
-    res.status(201).json(await insertMeeting(client, m))
-  } finally {
-    client.release()
-  }
+  res.status(201).json(await backend.createMeeting(m))
 }))
 
-app.patch('/api/meetings/:id', asyncRoute(async (req, res) => {
-  const { sets, values } = buildPatch(req.body || {}, meetingColumns)
-  if (!sets.length) return res.status(400).json({ error: 'empty patch' })
-  const { rows } = await pool.query(
-    `UPDATE meetings SET ${sets.join(', ')} WHERE id = $${values.length + 1} RETURNING *`,
-    [...values, req.params.id],
-  )
-  if (!rows.length) return res.status(404).json({ error: 'meeting not found' })
-  res.json(mapMeeting(rows[0]))
+app.patch('/app-api/meetings/:id', asyncRoute(async (req, res) => {
+  const row = await backend.patchMeeting(req.params.id, req.body || {})
+  if (!row) return res.status(404).json({ error: 'meeting not found' })
+  res.json(row)
 }))
 
-app.delete('/api/meetings/:id', asyncRoute(async (req, res) => {
-  await pool.query('DELETE FROM meetings WHERE id = $1', [req.params.id])
+app.delete('/app-api/meetings/:id', asyncRoute(async (req, res) => {
+  await backend.deleteMeeting(req.params.id)
   res.status(204).end()
 }))
 
-app.put('/api/minutes/:id', asyncRoute(async (req, res) => {
+app.put('/app-api/minutes/:id', asyncRoute(async (req, res) => {
   const m = { ...req.body, id: req.params.id }
   if (!m.meetingId) return res.status(400).json({ error: 'missing meetingId' })
-  const client = await pool.connect()
-  try {
-    res.json(await insertMinutes(client, m))
-  } finally {
-    client.release()
-  }
+  res.json(await backend.upsertMinutes(m))
 }))
 
-app.patch('/api/minutes/:id', asyncRoute(async (req, res) => {
-  const { sets, values } = buildPatch(req.body || {}, minutesColumns)
-  if (!sets.length) return res.status(400).json({ error: 'empty patch' })
-  const { rows } = await pool.query(
-    `UPDATE minutes SET ${sets.join(', ')} WHERE id = $${values.length + 1} RETURNING *`,
-    [...values, req.params.id],
-  )
-  if (!rows.length) return res.status(404).json({ error: 'minutes not found' })
-  res.json(mapMinutes(rows[0]))
+app.patch('/app-api/minutes/:id', asyncRoute(async (req, res) => {
+  const row = await backend.patchMinutes(req.params.id, req.body || {})
+  if (!row) return res.status(404).json({ error: 'minutes not found' })
+  res.json(row)
 }))
 
-app.delete('/api/minutes/:id', asyncRoute(async (req, res) => {
-  await pool.query('DELETE FROM minutes WHERE id = $1', [req.params.id])
+app.delete('/app-api/minutes/:id', asyncRoute(async (req, res) => {
+  await backend.deleteMinutes(req.params.id)
   res.status(204).end()
 }))
 
-app.post('/api/supervisions', asyncRoute(async (req, res) => {
+app.post('/app-api/supervisions', asyncRoute(async (req, res) => {
   const s = req.body
   if (!s?.id || !s.title) return res.status(400).json({ error: 'missing supervision fields' })
-  const client = await pool.connect()
-  try {
-    res.status(201).json(await insertSupervision(client, s))
-  } finally {
-    client.release()
-  }
+  res.status(201).json(await backend.createSupervision(s))
 }))
 
-app.patch('/api/supervisions/:id', asyncRoute(async (req, res) => {
-  const { sets, values } = buildPatch(req.body || {}, supervisionColumns)
-  if (!sets.length) return res.status(400).json({ error: 'empty patch' })
-  const { rows } = await pool.query(
-    `UPDATE supervisions SET ${sets.join(', ')} WHERE id = $${values.length + 1} RETURNING *`,
-    [...values, req.params.id],
-  )
-  if (!rows.length) return res.status(404).json({ error: 'supervision not found' })
-  res.json(mapSupervision(rows[0]))
+app.patch('/app-api/supervisions/:id', asyncRoute(async (req, res) => {
+  const row = await backend.patchSupervision(req.params.id, req.body || {})
+  if (!row) return res.status(404).json({ error: 'supervision not found' })
+  res.json(row)
 }))
 
-app.delete('/api/supervisions/:id', asyncRoute(async (req, res) => {
-  await pool.query('DELETE FROM supervisions WHERE id = $1', [req.params.id])
+app.delete('/app-api/supervisions/:id', asyncRoute(async (req, res) => {
+  await backend.deleteSupervision(req.params.id)
   res.status(204).end()
 }))
 
-app.use('/api', (_req, res) => {
+app.use('/app-api', (_req, res) => {
   res.status(404).json({ error: 'not found' })
 })
 
@@ -485,9 +720,10 @@ app.use((err, _req, res, _next) => {
 })
 
 async function start() {
-  await ensureSchema()
+  await backend.ensureSchema()
+  await backend.health()
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[server] listening on 0.0.0.0:${PORT}`)
+    console.log(`[server] listening on 0.0.0.0:${PORT} (${USE_CLOUDBASE ? 'cloudbase' : 'postgres'})`)
   })
 }
 

@@ -2,7 +2,7 @@
 set -eu
 
 export NPM_CONFIG_REGISTRY='https://registry.npmjs.org/'
-npm ci --registry='https://registry.npmjs.org/'
+npm ci --include=dev --registry='https://registry.npmjs.org/'
 npm run build
 npm prune --omit=dev
 

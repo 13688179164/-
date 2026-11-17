@@ -8,7 +8,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 3000,
     proxy: {
-      '/api': 'http://127.0.0.1:8787',
+      '/app-api': process.env.API_TARGET || 'http://127.0.0.1:8787',
     },
   },
 })

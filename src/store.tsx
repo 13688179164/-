@@ -54,6 +54,7 @@ async function apiRequest(url: string, method: string, body?: unknown) {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res
@@ -106,7 +107,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async () => {
     if (pendingRef.current > 0) return
     try {
-      const res = await apiRequest('/api/state', 'GET')
+      const res = await apiRequest('/app-api/state', 'GET')
       const data = (await res.json()) as AppState
       if (pendingRef.current > 0) return
       stateRef.current = data
@@ -120,11 +121,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false
     async function init() {
       try {
-        const res = await apiRequest('/api/state', 'GET')
+        const res = await apiRequest('/app-api/state', 'GET')
         let data = (await res.json()) as AppState
         if (!data.people?.length) {
           const seed = seedState()
-          await apiRequest('/api/bootstrap', 'POST', seed)
+          await apiRequest('/app-api/bootstrap', 'POST', seed)
           data = seed
         }
         if (cancelled) return
@@ -192,7 +193,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (input: Omit<Meeting, 'id' | 'createdAt'>) => {
       const meeting: Meeting = { ...input, id: uid('m'), createdAt: Date.now() }
       apply((s) => ({ ...s, meetings: [meeting, ...s.meetings] }))
-      void send('/api/meetings', 'POST', meeting)
+      void send('/app-api/meetings', 'POST', meeting)
       return meeting
     },
     [apply, send],
@@ -201,7 +202,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const updateMeeting = useCallback(
     (id: string, patch: Partial<Meeting>) => {
       apply((s) => ({ ...s, meetings: s.meetings.map((m) => (m.id === id ? { ...m, ...patch } : m)) }))
-      void send(`/api/meetings/${id}`, 'PATCH', patch)
+      void send(`/app-api/meetings/${id}`, 'PATCH', patch)
     },
     [apply, send],
   )
@@ -213,7 +214,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         meetings: s.meetings.filter((m) => m.id !== id),
         minutes: s.minutes.filter((mi) => mi.meetingId !== id),
       }))
-      void send(`/api/meetings/${id}`, 'DELETE')
+      void send(`/app-api/meetings/${id}`, 'DELETE')
     },
     [apply, send],
   )
@@ -225,7 +226,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...s,
         minutes: exists ? s.minutes.map((mi) => (mi.id === m.id ? m : mi)) : [m, ...s.minutes],
       }))
-      void send(`/api/minutes/${m.id}`, 'PUT', m)
+      void send(`/app-api/minutes/${m.id}`, 'PUT', m)
     },
     [apply, send],
   )
@@ -233,7 +234,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const updateMinutes = useCallback(
     (id: string, patch: Partial<Minutes>) => {
       apply((s) => ({ ...s, minutes: s.minutes.map((mi) => (mi.id === id ? { ...mi, ...patch } : mi)) }))
-      void send(`/api/minutes/${id}`, 'PATCH', patch)
+      void send(`/app-api/minutes/${id}`, 'PATCH', patch)
     },
     [apply, send],
   )
@@ -249,7 +250,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ),
       }))
       const target = next.minutes.find((mi) => mi.id === minutesId)
-      if (target) void send(`/api/minutes/${minutesId}`, 'PATCH', { actions: target.actions })
+      if (target) void send(`/app-api/minutes/${minutesId}`, 'PATCH', { actions: target.actions })
     },
     [apply, send],
   )
@@ -263,7 +264,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           mi.id === minutesId ? { ...mi, savedToCloud: true, savedAt: at } : mi,
         ),
       }))
-      void send(`/api/minutes/${minutesId}`, 'PATCH', { savedToCloud: true, savedAt: at })
+      void send(`/app-api/minutes/${minutesId}`, 'PATCH', { savedToCloud: true, savedAt: at })
       return at
     },
     [apply, send],
@@ -272,7 +273,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteMinutes = useCallback(
     (id: string) => {
       apply((s) => ({ ...s, minutes: s.minutes.filter((mi) => mi.id !== id) }))
-      void send(`/api/minutes/${id}`, 'DELETE')
+      void send(`/app-api/minutes/${id}`, 'DELETE')
     },
     [apply, send],
   )
@@ -286,7 +287,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         status: 'active',
       }
       apply((s) => ({ ...s, supervisions: [supervision, ...s.supervisions] }))
-      void send('/api/supervisions', 'POST', supervision)
+      void send('/app-api/supervisions', 'POST', supervision)
       return supervision
     },
     [apply, send],
@@ -312,7 +313,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       }))
       const target = next.supervisions.find((sv) => sv.id === id)
       if (target) {
-        void send(`/api/supervisions/${id}`, 'PATCH', {
+        void send(`/app-api/supervisions/${id}`, 'PATCH', {
           goals: target.goals,
           status: target.status,
           completedAt: target.completedAt ?? null,
@@ -331,7 +332,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           sv.id === id ? { ...sv, reminder: true, reminded: true, remindedAt: at } : sv,
         ),
       }))
-      void send(`/api/supervisions/${id}`, 'PATCH', { reminder: true, reminded: true, remindedAt: at })
+      void send(`/app-api/supervisions/${id}`, 'PATCH', { reminder: true, reminded: true, remindedAt: at })
     },
     [apply, send],
   )
@@ -342,7 +343,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...s,
         supervisions: s.supervisions.map((sv) => (sv.id === id ? { ...sv, ...patch } : sv)),
       }))
-      void send(`/api/supervisions/${id}`, 'PATCH', patch)
+      void send(`/app-api/supervisions/${id}`, 'PATCH', patch)
     },
     [apply, send],
   )
@@ -350,7 +351,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteSupervision = useCallback(
     (id: string) => {
       apply((s) => ({ ...s, supervisions: s.supervisions.filter((sv) => sv.id !== id) }))
-      void send(`/api/supervisions/${id}`, 'DELETE')
+      void send(`/app-api/supervisions/${id}`, 'DELETE')
     },
     [apply, send],
   )
