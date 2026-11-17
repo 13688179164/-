@@ -1,0 +1,268 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Noto Sans SC", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-display: "Inter Tight", "Noto Sans SC", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+
+  --color-ink: #0d1728;
+  --color-ink-2: #34415a;
+  --color-muted: #6a778c;
+  --color-faint: #96a1b3;
+  --color-line: #e5e9f0;
+  --color-paper: #f3f5f8;
+  --color-brand: #2b57e0;
+  --color-brand-dark: #1d3fb0;
+  --color-brand-soft: #eef2ff;
+  --color-teal: #0b8f7e;
+  --color-teal-soft: #e6f6f3;
+  --color-amber: #dd9518;
+  --color-amber-soft: #fdf4e3;
+  --color-danger: #d94a50;
+  --color-danger-soft: #fdeeee;
+  --color-navy: #0b1424;
+
+  --shadow-card: 0 1px 2px rgba(13, 23, 40, 0.04);
+  --shadow-lift: 0 18px 40px -18px rgba(13, 23, 40, 0.22);
+  --shadow-pop: 0 28px 70px -20px rgba(13, 23, 40, 0.32);
+}
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: #c9d6ff;
+    color: #0d1728;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.015em;
+  }
+  button {
+    cursor: pointer;
+  }
+  input,
+  textarea,
+  select {
+    font-family: inherit;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator {
+    opacity: 0.45;
+    cursor: pointer;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #d3dae5;
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 99px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #b9c3d2;
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-white;
+    box-shadow: var(--shadow-card);
+  }
+  .card-hover {
+    transition: box-shadow 0.25s ease, transform 0.25s ease, border-color 0.25s ease;
+  }
+  .card-hover:hover {
+    box-shadow: var(--shadow-lift);
+    transform: translateY(-2px);
+    border-color: #d6ddea;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl text-[13.5px] font-medium transition-all duration-200 select-none whitespace-nowrap;
+    height: 38px;
+    padding: 0 15px;
+  }
+  .btn:active {
+    transform: translateY(0.5px) scale(0.995);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
+  .btn-brand {
+    @apply bg-brand text-white;
+    box-shadow: 0 6px 14px -8px rgba(43, 87, 224, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  }
+  .btn-brand:hover {
+    @apply bg-brand-dark;
+  }
+  .btn-outline {
+    @apply border border-line bg-white text-ink-2;
+  }
+  .btn-outline:hover {
+    @apply border-[#cfd8e6] bg-[#f8fafc] text-ink;
+  }
+  .btn-ghost {
+    @apply text-muted;
+  }
+  .btn-ghost:hover {
+    @apply bg-[#eef1f6] text-ink;
+  }
+  .btn-soft {
+    @apply bg-brand-soft text-brand;
+  }
+  .btn-soft:hover {
+    @apply bg-[#e2e9ff];
+  }
+  .btn-danger {
+    @apply bg-danger text-white;
+  }
+  .btn-sm {
+    height: 32px;
+    padding: 0 11px;
+    @apply rounded-[10px] text-[12.5px];
+  }
+  .field {
+    @apply w-full rounded-xl border border-line bg-white px-3.5 py-2.5 text-[13.5px] text-ink outline-none transition placeholder:text-[#a3adbd];
+  }
+  .field:focus {
+    @apply border-brand/60;
+    box-shadow: 0 0 0 4px rgba(43, 87, 224, 0.1);
+  }
+  .label {
+    @apply mb-1.5 block text-[12.5px] font-medium text-ink-2;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11.5px] font-medium;
+  }
+  .hairline {
+    @apply border-t border-line;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+  .kicker {
+    @apply text-[11px] font-semibold tracking-[0.16em] text-faint uppercase;
+  }
+  .zoom-media {
+    transition: transform 0.4s cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+  .group:hover .zoom-media {
+    transform: scale(1.03);
+  }
+}
+
+@layer utilities {
+  .bg-grain {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.06) 0.6px, transparent 0.6px);
+    background-size: 18px 18px;
+  }
+  .bg-dots {
+    background-image: radial-gradient(rgba(13, 23, 40, 0.1) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  .animate-fade-up {
+    animation: fadeUp 0.5s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease both;
+  }
+  .animate-pop {
+    animation: pop 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  }
+  .animate-slide-in {
+    animation: slideIn 0.32s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  }
+  .animate-draw {
+    animation: draw 1.2s ease forwards;
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@keyframes pulseRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(217, 74, 80, 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(217, 74, 80, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(217, 74, 80, 0);
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
