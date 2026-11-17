@@ -29,6 +29,7 @@ import {
   diffMinutes,
   durationLabel,
   formatDate,
+  isPendingMeeting,
   meetingState,
   shortTime,
   timeRange,
@@ -79,7 +80,7 @@ function SectionTitle({ icon, title, count, tone = 'text-brand' }: { icon: React
 
 export default function MinutesPage() {
   const { state, route, notify, saveMinutes, markCloud, toggleAction } = useStore()
-  const meetings = state.meetings
+  const meetings = state.meetings.filter((m) => !isPendingMeeting(m))
   const fallbackId =
     meetings.find((m) => m.date === todayKey() && meetingState(m) === 'ongoing')?.id ??
     meetings.find((m) => m.date === todayKey())?.id ??

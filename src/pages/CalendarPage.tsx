@@ -7,6 +7,7 @@ import {
   diffMinutes,
   durationLabel,
   formatDate,
+  isPendingMeeting,
   meetingState,
   monthLabel,
   monthMatrix,
@@ -34,24 +35,28 @@ export default function CalendarPage() {
   const [selected, setSelected] = useState(today)
 
   const cells = useMemo(() => monthMatrix(cursor.y, cursor.m), [cursor])
+  const confirmedMeetings = useMemo(
+    () => state.meetings.filter((m) => !isPendingMeeting(m)),
+    [state.meetings],
+  )
   const byDate = useMemo(() => {
     const map = new Map<string, Meeting[]>()
-    state.meetings.forEach((m) => {
+    confirmedMeetings.forEach((m) => {
       const arr = map.get(m.date) ?? []
       arr.push(m)
       map.set(m.date, arr)
     })
     map.forEach((arr) => arr.sort((a, b) => a.start.localeCompare(b.start)))
     return map
-  }, [state.meetings])
+  }, [confirmedMeetings])
 
   const monthMeetings = useMemo(
     () =>
-      state.meetings.filter((m) => {
+      confirmedMeetings.filter((m) => {
         const [y, mth] = m.date.split('-').map(Number)
         return y === cursor.y && mth - 1 === cursor.m
       }),
-    [state.meetings, cursor],
+    [confirmedMeetings, cursor],
   )
   const totalMinutes = monthMeetings.reduce((acc, m) => acc + diffMinutes(m.start, m.end), 0)
   const dayMeetings = byDate.get(selected) ?? []

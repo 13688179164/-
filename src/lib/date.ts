@@ -1,4 +1,14 @@
+import type { Meeting } from '../types'
+
 const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六']
+
+export function isPendingMeeting(meeting: Meeting) {
+  return meeting.id.startsWith('pm_')
+}
+
+export function pendingRangeLabel(meeting: Meeting) {
+  return `${formatDate(meeting.date)} – ${formatDate(meeting.end)}`
+}
 
 export function pad(n: number) {
   return String(n).padStart(2, '0')

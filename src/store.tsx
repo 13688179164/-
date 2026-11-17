@@ -19,6 +19,16 @@ interface StoreValue {
   notify: (message: string, tone?: ToastItem['tone']) => void
   dismissToast: (id: string) => void
   addMeeting: (input: Omit<Meeting, 'id' | 'createdAt'>) => Meeting
+  addPendingMeeting: (
+    input: Omit<Meeting, 'id' | 'createdAt' | 'date' | 'start' | 'end'> & {
+      rangeStart: string
+      rangeEnd: string
+    },
+  ) => Meeting
+  confirmPendingMeeting: (
+    id: string,
+    time: { date: string; start: string; end: string },
+  ) => Meeting | null
   updateMeeting: (id: string, patch: Partial<Meeting>) => void
   deleteMeeting: (id: string) => void
   saveMinutes: (m: Minutes) => void
@@ -199,6 +209,52 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [apply, send],
   )
 
+  const addPendingMeeting = useCallback(
+    (
+      input: Omit<Meeting, 'id' | 'createdAt' | 'date' | 'start' | 'end'> & {
+        rangeStart: string
+        rangeEnd: string
+      },
+    ) => {
+      const { rangeStart, rangeEnd, ...rest } = input
+      const meeting: Meeting = {
+        ...rest,
+        id: uid('pm'),
+        date: rangeStart,
+        start: '',
+        end: rangeEnd,
+        createdAt: Date.now(),
+      }
+      apply((s) => ({ ...s, meetings: [meeting, ...s.meetings] }))
+      void send('/app-api/meetings', 'POST', meeting)
+      return meeting
+    },
+    [apply, send],
+  )
+
+  const confirmPendingMeeting = useCallback(
+    (id: string, time: { date: string; start: string; end: string }) => {
+      const source = stateRef.current.meetings.find((m) => m.id === id)
+      if (!source) return null
+      const meeting: Meeting = {
+        ...source,
+        id: uid('m'),
+        date: time.date,
+        start: time.start,
+        end: time.end,
+        createdAt: Date.now(),
+      }
+      apply((s) => ({
+        ...s,
+        meetings: [meeting, ...s.meetings.filter((m) => m.id !== id)],
+      }))
+      void send('/app-api/meetings', 'POST', meeting)
+      void send(`/app-api/meetings/${id}`, 'DELETE')
+      return meeting
+    },
+    [apply, send],
+  )
+
   const updateMeeting = useCallback(
     (id: string, patch: Partial<Meeting>) => {
       apply((s) => ({ ...s, meetings: s.meetings.map((m) => (m.id === id ? { ...m, ...patch } : m)) }))
@@ -366,6 +422,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       notify,
       dismissToast,
       addMeeting,
+      addPendingMeeting,
+      confirmPendingMeeting,
       updateMeeting,
       deleteMeeting,
       saveMinutes,
@@ -388,6 +446,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       notify,
       dismissToast,
       addMeeting,
+      addPendingMeeting,
+      confirmPendingMeeting,
       updateMeeting,
       deleteMeeting,
       saveMinutes,

@@ -1,7 +1,7 @@
 import { ArrowUpRight, AudioLines, CalendarDays, CalendarPlus, ChevronRight, Cloud, Clock, MapPin, Sparkles, Target, Users } from 'lucide-react'
 import { useStore } from '../store'
 import { CURRENT_USER_ID } from '../data'
-import { addDays, formatDate, meetingState, timeRange, todayKey, weekday, durationLabel, diffMinutes } from '../lib/date'
+import { addDays, formatDate, isPendingMeeting, meetingState, timeRange, todayKey, weekday, durationLabel, diffMinutes } from '../lib/date'
 import { Avatar, AvatarGroup, Badge, ProgressBar } from '../components/ui'
 
 function greeting() {
@@ -27,10 +27,11 @@ export default function Dashboard() {
   const me = state.people.find((p) => p.id === CURRENT_USER_ID)
 
   const monthPrefix = today.slice(0, 7)
-  const monthMeetings = state.meetings.filter((m) => m.date.startsWith(monthPrefix))
+  const confirmedMeetings = state.meetings.filter((m) => !isPendingMeeting(m))
+  const monthMeetings = confirmedMeetings.filter((m) => m.date.startsWith(monthPrefix))
   const weekEnd = addDays(today, 6)
-  const weekMeetings = state.meetings.filter((m) => m.date >= today && m.date <= weekEnd)
-  const todays = state.meetings.filter((m) => m.date === today).sort((a, b) => a.start.localeCompare(b.start))
+  const weekMeetings = confirmedMeetings.filter((m) => m.date >= today && m.date <= weekEnd)
+  const todays = confirmedMeetings.filter((m) => m.date === today).sort((a, b) => a.start.localeCompare(b.start))
   const todaysEnded = todays.filter((m) => meetingState(m) === 'ended').length
   const cloudMinutes = state.minutes.filter((m) => m.savedToCloud)
   const activeSups = state.supervisions.filter((s) => s.status === 'active')
@@ -38,7 +39,7 @@ export default function Dashboard() {
   const doneGoals = activeSups.reduce((acc, s) => acc + s.goals.filter((g) => g.done).length, 0)
   const avgProgress = totalGoals ? Math.round((doneGoals / totalGoals) * 100) : 0
 
-  const candidates = state.meetings
+  const candidates = confirmedMeetings
     .filter((m) => m.date > today || (m.date === today && meetingState(m) !== 'ended'))
     .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`))
   const nextMeeting = candidates[0]

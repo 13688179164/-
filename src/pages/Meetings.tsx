@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AudioLines,
   CalendarDays,
+  CalendarRange,
   Check,
   Clock,
   Flag,
@@ -17,10 +18,13 @@ import { useStore } from '../store'
 import { CURRENT_USER_ID } from '../data'
 import type { Meeting, MeetingType } from '../types'
 import {
+  addDays,
   diffMinutes,
   durationLabel,
   formatDate,
+  isPendingMeeting,
   meetingState,
+  pendingRangeLabel,
   timeRange,
   todayKey,
   weekday,
@@ -48,6 +52,8 @@ interface FormState {
   date: string
   start: string
   end: string
+  rangeStart: string
+  rangeEnd: string
   location: string
   participantIds: string[]
   content: string
@@ -61,6 +67,8 @@ function initialForm(initial?: Meeting | null): FormState {
     date: initial?.date ?? todayKey(),
     start: initial?.start ?? '10:00',
     end: initial?.end ?? '11:00',
+    rangeStart: todayKey(),
+    rangeEnd: addDays(todayKey(), 9),
     location: initial?.location ?? '2911会议室',
     participantIds: initial?.participantIds ?? ['p1'],
     content: initial?.content ?? '',
@@ -71,15 +79,18 @@ function initialForm(initial?: Meeting | null): FormState {
 function MeetingForm({
   open,
   initial,
+  mode = 'normal',
   onClose,
 }: {
   open: boolean
   initial?: Meeting | null
+  mode?: 'normal' | 'pending'
   onClose: () => void
 }) {
-  const { state, addMeeting, updateMeeting, notify } = useStore()
+  const { state, addMeeting, addPendingMeeting, updateMeeting, notify } = useStore()
   const [form, setForm] = useState<FormState>(() => initialForm(initial))
   const [error, setError] = useState('')
+  const pending = mode === 'pending'
 
   useEffect(() => {
     if (open) {
@@ -100,11 +111,31 @@ function MeetingForm({
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!form.title.trim()) return setError('请填写会议主题')
+    if (!form.location.trim()) return setError('请填写会议地点')
+    if (!form.participantIds.length) return setError('请至少选择一位参会人员')
+
+    if (pending) {
+      if (!form.rangeStart || !form.rangeEnd) return setError('请选择预计时间区间')
+      if (form.rangeEnd < form.rangeStart) return setError('结束日期需晚于开始日期')
+      addPendingMeeting({
+        title: form.title.trim(),
+        type: form.type,
+        rangeStart: form.rangeStart,
+        rangeEnd: form.rangeEnd,
+        location: form.location.trim(),
+        participantIds: form.participantIds,
+        content: form.content.trim() || '会议内容待补充',
+        priority: form.priority,
+        organizerId: CURRENT_USER_ID,
+      })
+      notify('待确认会议已创建，确认时间后转入待开始')
+      onClose()
+      return
+    }
+
     if (!form.date) return setError('请选择会议日期')
     if (!form.start || !form.end) return setError('请设置会议起止时间')
     if (form.end <= form.start) return setError('结束时间需晚于开始时间')
-    if (!form.location.trim()) return setError('请填写会议地点')
-    if (!form.participantIds.length) return setError('请至少选择一位参会人员')
 
     const payload = {
       title: form.title.trim(),
@@ -133,18 +164,24 @@ function MeetingForm({
     <Modal
       open={open}
       onClose={onClose}
-      title={initial ? '编辑会议' : '新建会议'}
-      description="填写会议要素，系统将自动生成议程日历并同步参会人"
+      title={pending ? '新建待确认会议' : initial ? '编辑会议' : '新建会议'}
+      description={
+        pending
+          ? '只选择预计时间区间，无需填写具体日期与时间；确认后再补充准确时间'
+          : '填写会议要素，系统将自动生成议程日历并同步参会人'
+      }
       width="max-w-[700px]"
       footer={
         <div className="flex items-center justify-between gap-3">
-          <p className="text-[11.5px] text-faint">会议创建后将同步至日历与纪要模块</p>
+          <p className="text-[11.5px] text-faint">
+            {pending ? '确认准确时间后，将自动转入会议统筹的待开始列表' : '会议创建后将同步至日历与纪要模块'}
+          </p>
           <div className="flex gap-2">
             <button type="button" className="btn btn-outline" onClick={onClose}>
               取消
             </button>
             <button type="submit" form="meeting-form" className="btn btn-brand">
-              {initial ? '保存修改' : '创建会议'}
+              {pending ? '创建待确认会议' : initial ? '保存修改' : '创建会议'}
             </button>
           </div>
         </div>
@@ -214,44 +251,76 @@ function MeetingForm({
           </div>
         </div>
 
-        <div className="grid gap-3.5 sm:grid-cols-3">
-          <div>
-            <label className="label" htmlFor="m-date">
-              会议日期 <span className="text-danger">*</span>
-            </label>
-            <input
-              id="m-date"
-              type="date"
-              className="field"
-              value={form.date}
-              onChange={(e) => setForm({ ...form, date: e.target.value })}
-            />
+        {pending ? (
+          <div className="grid gap-3.5 sm:grid-cols-2">
+            <div>
+              <label className="label" htmlFor="m-range-start">
+                预计最早日期 <span className="text-danger">*</span>
+              </label>
+              <input
+                id="m-range-start"
+                type="date"
+                className="field"
+                value={form.rangeStart}
+                onChange={(e) => setForm({ ...form, rangeStart: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="m-range-end">
+                预计最晚日期 <span className="text-danger">*</span>
+              </label>
+              <input
+                id="m-range-end"
+                type="date"
+                className="field"
+                value={form.rangeEnd}
+                onChange={(e) => setForm({ ...form, rangeEnd: e.target.value })}
+              />
+            </div>
+            <p className="text-[11px] text-faint sm:col-span-2">
+              示例：选择 12 月 1 日至 12 月 10 日，表示会议将在此区间内择期召开，不指定具体时间
+            </p>
           </div>
-          <div>
-            <label className="label" htmlFor="m-start">
-              开始时间 <span className="text-danger">*</span>
-            </label>
-            <input
-              id="m-start"
-              type="time"
-              className="field"
-              value={form.start}
-              onChange={(e) => setForm({ ...form, start: e.target.value })}
-            />
+        ) : (
+          <div className="grid gap-3.5 sm:grid-cols-3">
+            <div>
+              <label className="label" htmlFor="m-date">
+                会议日期 <span className="text-danger">*</span>
+              </label>
+              <input
+                id="m-date"
+                type="date"
+                className="field"
+                value={form.date}
+                onChange={(e) => setForm({ ...form, date: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="m-start">
+                开始时间 <span className="text-danger">*</span>
+              </label>
+              <input
+                id="m-start"
+                type="time"
+                className="field"
+                value={form.start}
+                onChange={(e) => setForm({ ...form, start: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label" htmlFor="m-end">
+                结束时间 <span className="text-danger">*</span>
+              </label>
+              <input
+                id="m-end"
+                type="time"
+                className="field"
+                value={form.end}
+                onChange={(e) => setForm({ ...form, end: e.target.value })}
+              />
+            </div>
           </div>
-          <div>
-            <label className="label" htmlFor="m-end">
-              结束时间 <span className="text-danger">*</span>
-            </label>
-            <input
-              id="m-end"
-              type="time"
-              className="field"
-              value={form.end}
-              onChange={(e) => setForm({ ...form, end: e.target.value })}
-            />
-          </div>
-        </div>
+        )}
 
         <div>
           <label className="label" htmlFor="m-location">
@@ -343,14 +412,118 @@ function MeetingForm({
   )
 }
 
+function ConfirmPendingModal({
+  meeting,
+  onClose,
+}: {
+  meeting: Meeting | null
+  onClose: () => void
+}) {
+  const { confirmPendingMeeting, notify } = useStore()
+  const [date, setDate] = useState(todayKey())
+  const [start, setStart] = useState('10:00')
+  const [end, setEnd] = useState('11:00')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (meeting) {
+      setDate(meeting.date)
+      setStart('10:00')
+      setEnd('11:00')
+      setError('')
+    }
+  }, [meeting])
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!meeting) return
+    if (!date) return setError('请选择准确日期')
+    if (!start || !end) return setError('请设置起止时间')
+    if (end <= start) return setError('结束时间需晚于开始时间')
+    confirmPendingMeeting(meeting.id, { date, start, end })
+    notify('会议已确认，已转入待开始')
+    onClose()
+  }
+
+  return (
+    <Modal
+      open={!!meeting}
+      onClose={onClose}
+      title="确认会议准确时间"
+      description={meeting ? `「${meeting.title}」预计区间：${pendingRangeLabel(meeting)}` : ''}
+      width="max-w-[560px]"
+      footer={
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11.5px] text-faint">保存后自动转入会议统筹的待开始列表</p>
+          <div className="flex gap-2">
+            <button type="button" className="btn btn-outline" onClick={onClose}>
+              取消
+            </button>
+            <button type="submit" form="confirm-meeting-form" className="btn btn-brand">
+              保存并转为待开始
+            </button>
+          </div>
+        </div>
+      }
+    >
+      <form id="confirm-meeting-form" onSubmit={submit} className="space-y-4">
+        <div className="grid gap-3.5 sm:grid-cols-3">
+          <div>
+            <label className="label" htmlFor="c-date">
+              准确日期 <span className="text-danger">*</span>
+            </label>
+            <input
+              id="c-date"
+              type="date"
+              className="field"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="c-start">
+              开始时间 <span className="text-danger">*</span>
+            </label>
+            <input
+              id="c-start"
+              type="time"
+              className="field"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="c-end">
+              结束时间 <span className="text-danger">*</span>
+            </label>
+            <input
+              id="c-end"
+              type="time"
+              className="field"
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+            />
+          </div>
+        </div>
+        <p className="rounded-lg bg-[#f6f2ff] px-3 py-2 text-[11.5px] leading-relaxed text-[#6b46d0]">
+          建议在预计区间内选择准确时间。保存后会议将同步至会议日历，并出现在「待开始」中。
+        </p>
+        {error && <p className="rounded-lg bg-danger-soft px-3 py-2 text-[12px] text-danger">{error}</p>}
+      </form>
+    </Modal>
+  )
+}
+
 export default function Meetings() {
   const { state, route, navigate, deleteMeeting, notify } = useStore()
   const [filter, setFilter] = useState('all')
   const [keyword, setKeyword] = useState('')
   const [formOpen, setFormOpen] = useState(false)
+  const [pendingOpen, setPendingOpen] = useState(false)
   const [editing, setEditing] = useState<Meeting | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
 
   useEffect(() => {
     if (route.newMeeting) {
@@ -367,8 +540,13 @@ export default function Meetings() {
   }, [route.meetingId, state.meetings])
 
   const counts = useMemo(() => {
-    const c = { all: state.meetings.length, upcoming: 0, ongoing: 0, ended: 0 }
+    const c = { all: 0, upcoming: 0, ongoing: 0, ended: 0, pending: 0 }
     state.meetings.forEach((m) => {
+      if (isPendingMeeting(m)) {
+        c.pending += 1
+        return
+      }
+      c.all += 1
       c[meetingState(m)] += 1
     })
     return c
@@ -377,9 +555,10 @@ export default function Meetings() {
   const list = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
     return state.meetings
+      .filter((m) => !isPendingMeeting(m))
       .filter((m) => {
         const st = meetingState(m)
-        if (filter !== 'all' && st !== filter) return false
+        if (filter !== 'all' && filter !== 'pending' && st !== filter) return false
         if (!kw) return true
         const names = state.people.filter((p) => m.participantIds.includes(p.id)).map((p) => p.name)
         return [m.title, m.location, m.content, m.type, ...names].join(' ').toLowerCase().includes(kw)
@@ -394,9 +573,22 @@ export default function Meetings() {
       })
   }, [state.meetings, state.people, filter, keyword])
 
-  const detail = state.meetings.find((m) => m.id === detailId) ?? null
+  const pendingList = useMemo(() => {
+    const kw = keyword.trim().toLowerCase()
+    return state.meetings
+      .filter(isPendingMeeting)
+      .filter((m) => {
+        if (!kw) return true
+        const names = state.people.filter((p) => m.participantIds.includes(p.id)).map((p) => p.name)
+        return [m.title, m.location, m.content, m.type, ...names].join(' ').toLowerCase().includes(kw)
+      })
+      .sort((a, b) => a.date.localeCompare(b.date))
+  }, [state.meetings, state.people, keyword])
+
+  const detail = state.meetings.find((m) => m.id === detailId && !isPendingMeeting(m)) ?? null
   const detailMinutes = detail ? state.minutes.find((mi) => mi.meetingId === detail.id) : undefined
   const deleteTarget = state.meetings.find((m) => m.id === deleteId)
+  const confirmTarget = state.meetings.find((m) => m.id === confirmId) ?? null
 
   return (
     <div>
@@ -405,15 +597,21 @@ export default function Meetings() {
         title="会议统筹"
         description="统一管理参会人、时间、地点与会议议题，确保每场会议都有明确的输入。"
         actions={
-          <button
-            className="btn btn-brand"
-            onClick={() => {
-              setEditing(null)
-              setFormOpen(true)
-            }}
-          >
-            <Plus size={16} /> 新建会议
-          </button>
+          filter === 'pending' ? (
+            <button className="btn btn-brand" onClick={() => setPendingOpen(true)}>
+              <Plus size={16} /> 新建待确认会议
+            </button>
+          ) : (
+            <button
+              className="btn btn-brand"
+              onClick={() => {
+                setEditing(null)
+                setFormOpen(true)
+              }}
+            >
+              <Plus size={16} /> 新建会议
+            </button>
+          )
         }
       />
 
@@ -423,6 +621,7 @@ export default function Meetings() {
           onChange={setFilter}
           items={[
             { key: 'all', label: '全部', count: counts.all },
+            { key: 'pending', label: '待确认', count: counts.pending },
             { key: 'upcoming', label: '待开始', count: counts.upcoming },
             { key: 'ongoing', label: '进行中', count: counts.ongoing },
             { key: 'ended', label: '已结束', count: counts.ended },
@@ -439,7 +638,97 @@ export default function Meetings() {
         </div>
       </div>
 
-      {list.length ? (
+      {filter === 'pending' ? (
+        pendingList.length ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {pendingList.map((m) => {
+              const style = TYPE_STYLE[m.type] ?? TYPE_STYLE['俱乐部月会']
+              const attendees = state.people.filter((p) => m.participantIds.includes(p.id))
+              return (
+                <article
+                  key={m.id}
+                  className="flex flex-col rounded-xl border border-[#e8dcf5] bg-[#fbf8ff] p-5"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-[52px] w-[52px] flex-none flex-col items-center justify-center rounded-xl bg-[#f1e9ff] text-[#6b46d0]">
+                      <CalendarRange size={18} />
+                      <span className="mt-1 text-[9px] font-medium opacity-80">区间</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge tone={style.tone}>{m.type}</Badge>
+                          <span className="rounded-full bg-[#f1e9ff] px-1.5 py-0.5 text-[10px] font-medium text-[#6b46d0]">
+                            待确认
+                          </span>
+                          {m.priority === 'high' && (
+                            <span className="inline-flex items-center gap-0.5 text-[10.5px] font-medium text-amber">
+                              <Flag size={10} /> 重点
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => setDeleteId(m.id)}
+                          className="grid h-7 w-7 place-items-center rounded-md text-faint hover:bg-danger-soft hover:text-danger"
+                          aria-label="删除待确认会议"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                      <h3 className="mt-1.5 line-clamp-1 text-[15px] font-semibold text-ink">{m.title}</h3>
+                      <p className="mt-1 flex items-center gap-1 text-[11px] text-[#6b46d0]">
+                        <CalendarRange size={11} /> {pendingRangeLabel(m)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="mt-3.5 line-clamp-2 min-h-[34px] text-[12px] leading-relaxed text-muted">
+                    {m.content.split('\n').filter(Boolean).join(' · ')}
+                  </p>
+
+                  <div className="mt-3.5 space-y-1.5 text-[11.5px] text-ink-2">
+                    <p className="flex items-center gap-2">
+                      <MapPin size={12.5} className="text-faint" />
+                      <span className="truncate">{m.location}</span>
+                    </p>
+                    <p className="flex items-center gap-2">
+                      <Users size={12.5} className="text-faint" />
+                      {attendees.length} 位参会人
+                    </p>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between border-t border-[#eadff7] pt-3.5">
+                    <div className="flex items-center gap-2">
+                      <AvatarGroup people={attendees} max={3} size={23} />
+                      <span className="text-[11px] text-muted">是否已确认</span>
+                    </div>
+                    <div className="flex items-center gap-1 rounded-lg border border-[#e8dcf5] bg-white p-0.5">
+                      <span className="rounded-md px-2 py-1 text-[11px] text-faint">未确认</span>
+                      <button
+                        onClick={() => setConfirmId(m.id)}
+                        className="rounded-md bg-[#f1e9ff] px-2 py-1 text-[11px] font-medium text-[#6b46d0] transition hover:bg-[#e8dcf7]"
+                      >
+                        已确认
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        ) : (
+          <EmptyState
+            icon={<CalendarRange size={22} />}
+            title="暂无待确认会议"
+            description="创建待确认会议，先锁定一个时间区间，确认后再补充准确时间。"
+            action={
+              <button className="btn btn-brand btn-sm" onClick={() => setPendingOpen(true)}>
+                <Plus size={14} /> 新建待确认会议
+              </button>
+            }
+          />
+        )
+      ) : list.length ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {list.map((m) => {
             const st = meetingState(m)
@@ -567,6 +856,8 @@ export default function Meetings() {
       )}
 
       <MeetingForm open={formOpen} initial={editing} onClose={() => setFormOpen(false)} />
+      <MeetingForm open={pendingOpen} mode="pending" onClose={() => setPendingOpen(false)} />
+      <ConfirmPendingModal meeting={confirmTarget} onClose={() => setConfirmId(null)} />
 
       <Modal
         open={!!detail}

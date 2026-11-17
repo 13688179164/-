@@ -13,7 +13,7 @@ import { StoreProvider, useStore } from './store'
 import { CURRENT_USER_ID } from './data'
 import type { PageKey } from './types'
 import { cn } from './lib/utils'
-import { todayKey } from './lib/date'
+import { isPendingMeeting, todayKey } from './lib/date'
 import { Avatar, ToastHost } from './components/ui'
 import Dashboard from './pages/Dashboard'
 import Meetings from './pages/Meetings'
@@ -42,7 +42,7 @@ const NAV: { group: string; items: { key: PageKey; label: string; icon: typeof L
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { state, route, navigate } = useStore()
   const today = todayKey()
-  const todayCount = state.meetings.filter((m) => m.date === today).length
+  const todayCount = state.meetings.filter((m) => !isPendingMeeting(m) && m.date === today).length
   const activeCount = state.supervisions.filter((s) => s.status === 'active').length
   const cloudCount = state.minutes.filter((m) => m.savedToCloud).length
   const me = state.people.find((p) => p.id === CURRENT_USER_ID)
