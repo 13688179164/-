@@ -14,6 +14,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useStore } from '../store'
+import { CURRENT_USER_ID } from '../data'
 import type { Meeting, MeetingType } from '../types'
 import {
   diffMinutes,
@@ -117,7 +118,7 @@ function MeetingForm({
       participantIds: form.participantIds,
       content: form.content.trim() || '会议内容待补充',
       priority: form.priority,
-      organizerId: initial?.organizerId ?? 'p1',
+      organizerId: initial?.organizerId ?? CURRENT_USER_ID,
     }
 
     if (initial) {
@@ -303,7 +304,8 @@ function MeetingForm({
                   <span className="min-w-0 flex-1">
                     <span className="block text-[12.5px] font-medium text-ink">{p.name}</span>
                     <span className="block truncate text-[10.5px] text-faint">
-                      {p.role} · {p.org}
+                      {p.role}
+                      {p.org && p.org !== p.role ? ` · ${p.org}` : ''}
                     </span>
                   </span>
                   <span
@@ -643,7 +645,8 @@ export default function Meetings() {
                       <div className="min-w-0">
                         <p className="text-[12px] font-medium text-ink">{p.name}</p>
                         <p className="truncate text-[10.5px] text-faint">
-                          {p.role} · {p.org}
+                          {p.role}
+                          {p.org && p.org !== p.role ? ` · ${p.org}` : ''}
                         </p>
                       </div>
                     </div>

@@ -10,6 +10,7 @@ import {
   X,
 } from 'lucide-react'
 import { StoreProvider, useStore } from './store'
+import { CURRENT_USER_ID } from './data'
 import type { PageKey } from './types'
 import { cn } from './lib/utils'
 import { todayKey } from './lib/date'
@@ -44,7 +45,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const todayCount = state.meetings.filter((m) => m.date === today).length
   const activeCount = state.supervisions.filter((s) => s.status === 'active').length
   const cloudCount = state.minutes.filter((m) => m.savedToCloud).length
-  const me = state.people.find((p) => p.id === 'p1')
+  const me = state.people.find((p) => p.id === CURRENT_USER_ID)
 
   const counts: Partial<Record<PageKey, number>> = {
     calendar: todayCount,
@@ -65,9 +66,9 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
       <div className="mx-4 mb-6 flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.04] px-3 py-2.5">
         <span className="grid h-6 w-6 place-items-center rounded-md bg-[#1d2b45] text-[10px] font-semibold text-[#9fb2d8]">
-          研
+          总
         </span>
-        <span className="flex-1 text-[12px] text-[#c3cfe3]">研发中心 · Q4</span>
+        <span className="flex-1 text-[12px] text-[#c3cfe3]">公司总部 · 协同空间</span>
         <span className="rounded-full bg-[#1c3358] px-1.5 py-0.5 text-[9.5px] font-medium text-[#7fa4e8]">空间</span>
       </div>
 
@@ -133,8 +134,8 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <div className="mt-4 flex items-center gap-2.5 border-t border-white/[0.06] pt-4">
           {me && <Avatar person={me} size={32} />}
           <div className="min-w-0 flex-1 leading-tight">
-            <p className="truncate text-[12.5px] font-medium text-[#e5ebf5]">{me?.name ?? '林砚'}</p>
-            <p className="truncate text-[10.5px] text-[#71839f]">{me?.role ?? '产品负责人'}</p>
+            <p className="truncate text-[12.5px] font-medium text-[#e5ebf5]">{me?.name ?? '李嘉航'}</p>
+            <p className="truncate text-[10.5px] text-[#71839f]">{me?.role ?? '财务及后台综合管理员'}</p>
           </div>
           <span className="rounded-full border border-white/[0.08] px-1.5 py-0.5 text-[9px] text-[#8ea0bb]">在线</span>
         </div>

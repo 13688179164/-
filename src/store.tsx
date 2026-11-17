@@ -3,7 +3,7 @@ import type { AppState, Meeting, Minutes, PageKey, Supervision, ToastItem } from
 import { seedState } from './data'
 import { uid } from './lib/utils'
 
-const STORAGE_KEY = 'heyi.platform.v1'
+const STORAGE_KEY = 'heyi.platform.v2'
 
 interface RouteState {
   page: PageKey

@@ -17,6 +17,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useStore } from '../store'
+import { CURRENT_USER_ID } from '../data'
 import type { Supervision } from '../types'
 import { addDays, daysBetween, formatDate, overdueLabel, shortTime, todayKey } from '../lib/date'
 import {
@@ -47,7 +48,7 @@ interface SupForm {
 const blankForm = (): SupForm => ({
   title: '',
   note: '',
-  ownerIds: ['p1'],
+  ownerIds: [CURRENT_USER_ID],
   startDate: todayKey(),
   dueDate: addDays(todayKey(), 7),
   goals: ['目标 1', '目标 2', '目标 3'],
@@ -87,6 +88,7 @@ function ReminderBadge({ supervision, onClick }: { supervision: Supervision; onC
 
 export default function SupervisionPage() {
   const { state, addSupervision, toggleGoal, markReminded, deleteSupervision, notify } = useStore()
+  const me = state.people.find((p) => p.id === CURRENT_USER_ID)
   const [tab, setTab] = useState<'active' | 'history'>('active')
   const [keyword, setKeyword] = useState('')
   const [formOpen, setFormOpen] = useState(false)
@@ -476,7 +478,7 @@ export default function SupervisionPage() {
         width="max-w-[680px]"
         footer={
           <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] text-faint">申请人：林砚 · 产品中心</p>
+            <p className="text-[11px] text-faint">申请人：{me?.name ?? '李嘉航'} · {me?.role ?? '财务及后台综合管理员'}</p>
             <div className="flex gap-2">
               <button type="button" className="btn btn-outline" onClick={() => setFormOpen(false)}>
                 取消

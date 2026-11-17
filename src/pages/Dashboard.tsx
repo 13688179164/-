@@ -1,5 +1,6 @@
 import { ArrowUpRight, AudioLines, CalendarDays, CalendarPlus, ChevronRight, Cloud, Clock, MapPin, Sparkles, Target, Users } from 'lucide-react'
 import { useStore } from '../store'
+import { CURRENT_USER_ID } from '../data'
 import { addDays, formatDate, meetingState, timeRange, todayKey, weekday, durationLabel, diffMinutes } from '../lib/date'
 import { Avatar, AvatarGroup, Badge, ProgressBar } from '../components/ui'
 
@@ -23,7 +24,7 @@ export default function Dashboard() {
   const { state, navigate } = useStore()
   const today = todayKey()
   const now = new Date()
-  const me = state.people.find((p) => p.id === 'p1')
+  const me = state.people.find((p) => p.id === CURRENT_USER_ID)
 
   const monthPrefix = today.slice(0, 7)
   const monthMeetings = state.meetings.filter((m) => m.date.startsWith(monthPrefix))
@@ -72,7 +73,7 @@ export default function Dashboard() {
               {formatDate(today, true)} · {weekday(today)}
             </p>
             <h1 className="font-display text-[30px] leading-tight font-semibold tracking-tight lg:text-[34px]">
-              {greeting()}，{me?.name ?? '林砚'}
+              {greeting()}，{me?.name ?? '李嘉航'}
             </h1>
             <p className="mt-3 max-w-[440px] text-[13px] leading-relaxed text-[#a7b8d4]">
               今天安排了 <span className="font-medium text-white">{todays.length}</span> 场会议
