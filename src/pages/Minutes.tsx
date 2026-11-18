@@ -99,11 +99,23 @@ export default function MinutesPage() {
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzeStep, setAnalyzeStep] = useState(0)
 
+  const [audioUrl, setAudioUrl] = useState('')
+  const [audioType, setAudioType] = useState('audio/webm')
+
   const streamRef = useRef<MediaStream | null>(null)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const speechRef = useRef<any>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const audioUrlRef = useRef('')
+  const discardRef = useRef(false)
   const mountedRef = useRef(true)
   const lastRouteRef = useRef<string | undefined>(undefined)
+
+  const clearAudio = () => {
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current)
+    audioUrlRef.current = ''
+    setAudioUrl('')
+  }
 
   const meeting = meetings.find((m) => m.id === selectedId)
   const minutes = state.minutes.find((mi) => mi.meetingId === selectedId)
@@ -137,27 +149,41 @@ export default function MinutesPage() {
       /* noop */
     }
     speechRef.current = null
-    try {
-      recorderRef.current?.stop?.()
-    } catch {
-      /* noop */
-    }
+
+    const recorder = recorderRef.current
+    const stream = streamRef.current
     recorderRef.current = null
-    streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
+
+    if (recorder && recorder.state !== 'inactive') {
+      try {
+        recorder.stop()
+        if (stream) {
+          recorder.addEventListener('stop', () => stream.getTracks().forEach((t) => t.stop()), { once: true })
+        }
+      } catch {
+        stream?.getTracks().forEach((t) => t.stop())
+      }
+    } else {
+      stream?.getTracks().forEach((t) => t.stop())
+    }
+
     setRecording(false)
     setInterim('')
   }
 
   useEffect(() => {
     return () => {
+      discardRef.current = true
       stopMedia()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
+    discardRef.current = true
     stopMedia()
+    clearAudio()
     const mi = state.minutes.find((x) => x.meetingId === selectedId)
     setTranscript(mi?.transcript ?? '')
     setSeconds(mi?.durationSec ?? 0)
@@ -167,58 +193,116 @@ export default function MinutesPage() {
   }, [selectedId])
 
   const startRecording = async () => {
-    if (!meeting) return
+    if (!meeting || recording) return
+    setTab('record')
     setSeconds(0)
     setTranscript('')
     setInterim('')
-    setRecording(true)
-    setTab('record')
     setSpeechHint('正在请求麦克风权限…')
+    discardRef.current = false
+    clearAudio()
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setSpeechHint('当前浏览器环境不支持麦克风采集（需 HTTPS），可直接输入或载入示例转写')
+      notify('当前浏览器不支持麦克风录音，请改用 Chrome / Edge 并允许麦克风权限', 'warn')
+      return
+    }
+
+    let stream: MediaStream
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      streamRef.current = stream
-      if (typeof MediaRecorder !== 'undefined') {
-        recorderRef.current = new MediaRecorder(stream)
-        recorderRef.current.start()
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    } catch (err) {
+      const name = (err as DOMException)?.name
+      setSpeechHint(
+        name === 'NotAllowedError'
+          ? '麦克风权限被拒绝，请在地址栏允许麦克风后重试；也可手动输入或载入示例转写'
+          : name === 'NotFoundError'
+            ? '未检测到麦克风设备，请检查设备连接；也可手动输入或载入示例转写'
+            : '无法访问麦克风，可手动输入或载入示例转写',
+      )
+      notify('未能开始录音：麦克风不可用', 'warn')
+      return
+    }
+
+    streamRef.current = stream
+    chunksRef.current = []
+    setRecording(true)
+    setSpeechHint('录音中…')
+
+    if (typeof MediaRecorder !== 'undefined') {
+      try {
+        const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find(
+          (t) => MediaRecorder.isTypeSupported?.(t),
+        )
+        const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream)
+        rec.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) chunksRef.current.push(e.data)
+        }
+        rec.onstop = () => {
+          if (discardRef.current || !mountedRef.current) {
+            chunksRef.current = []
+            return
+          }
+          const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' })
+          chunksRef.current = []
+          if (!blob.size) return
+          clearAudio()
+          const url = URL.createObjectURL(blob)
+          audioUrlRef.current = url
+          setAudioType(blob.type || 'audio/webm')
+          setAudioUrl(url)
+        }
+        rec.start(1000)
+        recorderRef.current = rec
+      } catch {
+        /* 录音流仍可用，仅无法生成回放文件 */
       }
-      setSpeechHint('录音中，语音将实时转写为文字')
-    } catch {
-      setSpeechHint('未获得麦克风权限，已切换为手动转写模式，可直接输入或载入示例')
     }
 
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (SR) {
-      try {
-        const rec = new SR()
-        rec.lang = 'zh-CN'
-        rec.continuous = true
-        rec.interimResults = true
-        rec.onresult = (event: any) => {
-          let finalText = ''
-          let temp = ''
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const res = event.results[i]
-            if (res.isFinal) finalText += res[0].transcript
-            else temp += res[0].transcript
-          }
-          if (finalText) setTranscript((prev) => (prev + finalText).trim())
-          setInterim(temp)
+    if (!SR) {
+      setSpeechHint('录音已开始；当前浏览器不支持自动转写，可手动记录，或结束后回放录音')
+      return
+    }
+
+    try {
+      const rec = new SR()
+      rec.lang = 'zh-CN'
+      rec.continuous = true
+      rec.interimResults = true
+      rec.onresult = (event: any) => {
+        let finalText = ''
+        let temp = ''
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i]
+          if (res.isFinal) finalText += res[0].transcript
+          else temp += res[0].transcript
         }
-        rec.onerror = () => setSpeechHint('语音识别暂时不可用，可继续录音并手动补充文字')
-        rec.start()
-        speechRef.current = rec
-      } catch {
-        setSpeechHint('语音识别启动失败，已保留录音计时，可手动记录')
+        if (finalText) setTranscript((prev) => (prev + finalText).trim())
+        setInterim(temp)
       }
-    } else {
-      setSpeechHint('当前浏览器不支持实时语音识别，建议使用 Chrome 或手动记录')
+      rec.onerror = (event: any) => {
+        setInterim('')
+        setSpeechHint(
+          event?.error === 'network'
+            ? '录音正在正常进行；当前网络无法连接语音识别服务，可手动补充文字'
+            : '录音正在正常进行；实时转写暂时不可用，可手动补充文字',
+        )
+      }
+      rec.onend = () => {
+        if (speechRef.current === rec) setInterim('')
+      }
+      rec.start()
+      speechRef.current = rec
+      setSpeechHint('录音中，语音将实时转写为文字')
+    } catch {
+      setSpeechHint('录音已开始；实时转写启动失败，可直接手动记录')
     }
   }
 
   const stopRecording = () => {
     stopMedia()
-    setSpeechHint('录音已结束，转写内容可继续编辑，确认后生成纪要')
+    setSpeechHint('录音已结束，可回放本次录音，或继续编辑转写内容')
   }
 
   const loadDemo = () => {
@@ -431,7 +515,7 @@ export default function MinutesPage() {
                     )}
                   </div>
                   <span className="text-[11px] text-faint">
-                    {speechSupported ? '支持中文实时语音识别' : '建议使用 Chrome 获得实时识别'}
+                    {speechSupported ? '麦克风录音 · 自动转写已就绪' : '麦克风录音可用 · 转写可手动编辑'}
                   </span>
                 </div>
               </div>
@@ -443,7 +527,7 @@ export default function MinutesPage() {
                       {clock(seconds)}
                     </p>
                     <p className="mt-2 text-[11.5px] text-muted">
-                      {recording ? '正在录音，请保持麦克风通畅' : seconds ? '录音已结束，可编辑转写内容' : '点击开始录音，或载入示例转写'}
+                      {recording ? '正在录音，请保持麦克风通畅' : audioUrl ? '录音已保存，可回放或下载' : seconds ? '录音已结束，可编辑转写内容' : '点击开始录音，或载入示例转写'}
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       {recording ? (
@@ -464,12 +548,28 @@ export default function MinutesPage() {
                           onClick={() => {
                             setTranscript('')
                             setSeconds(0)
+                            clearAudio()
                           }}
                         >
                           <Trash2 size={13} /> 清空
                         </button>
                       )}
                     </div>
+                    {audioUrl && !recording && (
+                      <div className="mt-3 rounded-xl border border-line bg-[#fafbfd] px-3 py-2.5">
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <span className="text-[11px] font-medium text-ink-2">本次录音</span>
+                          <a
+                            className="inline-flex items-center gap-1 text-[11px] text-brand hover:underline"
+                            href={audioUrl}
+                            download={`${meeting.title}-录音.${audioType.includes('mp4') ? 'm4a' : audioType.includes('ogg') ? 'ogg' : 'webm'}`}
+                          >
+                            <Download size={11} /> 下载
+                          </a>
+                        </div>
+                        <audio controls src={audioUrl} className="h-8 w-full" />
+                      </div>
+                    )}
                   </div>
                   <div className="rounded-xl border border-line bg-[#fafbfd] px-4 py-3">
                     <div className="flex items-center justify-between">
@@ -484,15 +584,15 @@ export default function MinutesPage() {
                 <div className="mt-5">
                   <div className="mb-1.5 flex items-center justify-between">
                     <label className="text-[12px] font-medium text-ink-2" htmlFor="transcript">
-                      实时转写
+                      会议转写
                     </label>
-                    <span className="text-[10.5px] text-faint">可直接编辑或粘贴会议记录</span>
+                    <span className="text-[10.5px] text-faint">自动转写不可用时可手动编辑或粘贴</span>
                   </div>
                   <textarea
                     id="transcript"
                     value={transcript}
                     onChange={(e) => setTranscript(e.target.value)}
-                    placeholder="点击「开始录音」后，识别到的内容会实时出现在这里；也可以粘贴已有会议记录，或载入示例转写体验完整流程。"
+                    placeholder="点击「开始录音」后，浏览器支持时会实时转写到这里；不支持自动转写时，录音仍会正常进行，可回放录音并手动整理文字，或直接粘贴已有会议记录。"
                     className="field min-h-[170px] resize-y bg-[#fcfdfe] leading-relaxed"
                   />
                   {recording && interim && (
