@@ -22,6 +22,7 @@ export const people: Person[] = [
   { id: 'p14', name: '冯博欣', role: '商务部', org: '商务部', tone: 'amber' },
   { id: 'p15', name: '刘思远', role: '商务部', org: '商务部', tone: 'rose' },
   { id: 'p16', name: '李小刚', role: '主管会计', org: '财务后台', tone: 'blue' },
+  { id: 'p17', name: '钟弘非', role: '商务部', org: '商务部', tone: 'violet' },
 ]
 
 const d = (offset: number) => addDays(todayKey(), offset)
