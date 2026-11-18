@@ -285,7 +285,7 @@ export default function MinutesPage() {
         setInterim('')
         setSpeechHint(
           event?.error === 'network'
-            ? '录音正在正常进行；当前网络无法连接语音识别服务，可手动补充文字'
+            ? '录音正在正常进行；实时转写需接入云端语音识别服务，当前可手动补充文字'
             : '录音正在正常进行；实时转写暂时不可用，可手动补充文字',
         )
       }
@@ -365,8 +365,6 @@ export default function MinutesPage() {
       </div>
     )
   }
-
-  const speechSupported = typeof window !== 'undefined' && !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
 
   return (
     <div>
@@ -514,9 +512,7 @@ export default function MinutesPage() {
                       </span>
                     )}
                   </div>
-                  <span className="text-[11px] text-faint">
-                    {speechSupported ? '麦克风录音 · 自动转写已就绪' : '麦克风录音可用 · 转写可手动编辑'}
-                  </span>
+                  <span className="text-[11px] text-faint">麦克风录音 · 转写可手动编辑</span>
                 </div>
               </div>
 
