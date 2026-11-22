@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#05070b" />
+  <title>GOODWORK 古德車房 · 三维财务报销工作台</title>
+  <script type="module" crossorigin src="./assets/index-CeZ2rXPz.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-DVPkx1sA.css">
+</head>
+<body>
+  <div id="app">
+    <div id="scene-layer" class="scene-layer">
+      <canvas id="scene" aria-label="GOODWORK 古德車房三维场景"></canvas>
+      <div class="scene-grade"></div>
+      <div class="scene-grain"></div>
+      <div class="scene-scan"></div>
+      <div class="cine-frame" aria-hidden="true">
+        <i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i>
+      </div>
+      <div id="tooltip" class="tooltip" role="status">
+        <span class="tt-dot"></span>
+        <span class="tt-code"></span>
+        <span class="tt-name"></span>
+        <em>点击查看档案</em>
+      </div>
+    </div>
+
+    <header class="hud-top">
+      <div class="brand">
+        <div class="brand-mark"><span>GW</span></div>
+        <div class="brand-copy">
+          <div class="brand-name">GOODWORK</div>
+          <div class="brand-sub">古德車房 · 财务报销工作台 <em>SCENE 01</em></div>
+        </div>
+      </div>
+
+      <nav class="scene-tools" aria-label="场景控制">
+        <div class="season-switch" id="season-switch" role="group" aria-label="季节切换">
+          <button class="season-btn is-active" data-season="spring" title="春 · 樱瓣">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3c1.7 1.6 2.6 3.1 2.6 4.5 0 1.2-.9 2-2.6 2s-2.6-.8-2.6-2C7.4 6.1 8.3 4.6 10 3Z"/><path d="M10 9.5c1.7 1.6 2.6 3.1 2.6 4.5 0 1.2-.9 2-2.6 2s-2.6-.8-2.6-2c0-1.4.9-2.9 2.6-4.5Z" opacity=".5"/></svg>
+            <span>春</span>
+          </button>
+          <button class="season-btn" data-season="summer" title="夏 · 骤雨">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="8" r="3.2"/><path d="M4 13.5h12M6 16.2h8" opacity=".55"/></svg>
+            <span>夏</span>
+          </button>
+          <button class="season-btn" data-season="autumn" title="秋 · 落叶">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3c3.8 1.6 5.4 4.4 4.2 7.2-1 2.4-3.4 3.4-5.6 2.5-2.4-1-3.2-3.6-1.6-6.1"/><path d="M10 3v10l-3 4" opacity=".5"/></svg>
+            <span>秋</span>
+          </button>
+          <button class="season-btn" data-season="winter" title="冬 · 细雪">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v14M4 6.5l12 7M16 6.5l-12 7"/><path d="M8 4.5 10 6l2-1.5M8 15.5 10 14l2 1.5" opacity=".6"/></svg>
+            <span>冬</span>
+          </button>
+        </div>
+        <button id="auto-season" class="tool-btn is-on" title="每 18–28 秒随机切换季节">
+          <span class="ring" id="season-ring"></span>
+          <span>自动轮转</span>
+          <em id="auto-count">22s</em>
+        </button>
+        <button id="cinema-btn" class="tool-btn is-on" title="电影运镜">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="5.5" width="14" height="9" rx="1"/><path d="M8 5.5v9M12 5.5v9M3 10h14" opacity=".45"/></svg>
+          <span>电影运镜</span>
+        </button>
+        <button id="sound-btn" class="tool-btn is-on" title="交互音效">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8v4h3l4 3V5L7 8H4Z"/><path d="M13.5 7.5c1.3 1.3 1.3 3.7 0 5M15.5 5.5c2.5 2.5 2.5 6.5 0 9" opacity=".55"/></svg>
+          <span>音效</span>
+        </button>
+        <button id="label-btn" class="tool-btn is-on" title="场景世界标签">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14v8H8l-3 3v-3H3V5Z"/><path d="M7 9h6" opacity=".5"/></svg>
+          <span>场景标签</span>
+        </button>
+        <button id="reset-btn" class="tool-btn" title="复位镜头">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M16 8a6 6 0 1 0 .4 3"/><path d="M16 3v5h-5"/></svg>
+          <span>复位视角</span>
+        </button>
+      </nav>
+
+      <div class="top-right">
+        <div class="channel"><span class="live-dot"></span>报销通道开放<em>LIVE</em></div>
+        <div class="clock"><span id="clock">23:18</span><em>Asia/Shanghai</em></div>
+        <button class="primary-btn" id="new-claim-btn">发起报销</button>
+        <div class="user">
+          <div class="avatar">CM</div>
+          <div><b>陈默</b><span>财务中心 / 复核</span></div>
+        </div>
+      </div>
+    </header>
+
+    <aside class="rail" id="rail">
+      <section class="rail-block">
+        <div class="rail-head"><span>运营总览</span><em>OPS / LIVE</em></div>
+        <div class="kpi">
+          <span class="kpi-label">本月已报销</span>
+          <div class="kpi-num" id="kpi-total">¥286,400</div>
+          <div class="kpi-delta"><i>▲</i> 12.4% <span>较上月</span></div>
+          <svg class="spark" viewBox="0 0 200 36" preserveAspectRatio="none" aria-hidden="true">
+            <path class="spark-area" d="M0 30 L14 26 L28 28 L42 20 L56 22 L70 15 L84 18 L98 12 L112 16 L126 9 L140 13 L154 7 L168 10 L182 4 L200 6 L200 36 L0 36 Z"/>
+            <path class="spark-line" d="M0 30 L14 26 L28 28 L42 20 L56 22 L70 15 L84 18 L98 12 L112 16 L126 9 L140 13 L154 7 L168 10 L182 4 L200 6"/>
+          </svg>
+        </div>
+        <div class="stat-grid">
+          <div><b>12</b><span>待审批</span></div>
+          <div><b>08</b><span>场景单据</span></div>
+          <div><b>1.8h</b><span>平均时效</span></div>
+        </div>
+      </section>
+
+      <section class="rail-block">
+        <div class="rail-head"><span>环境系统</span><em>ATMOSPHERE</em></div>
+        <div class="season-read">
+          <div class="season-glyph" id="season-glyph">春</div>
+          <div class="season-meta">
+            <b id="season-name">春 · 樱瓣</b>
+            <span id="season-en">SPRING / CHERRY BLOSSOM</span>
+            <div class="season-progress"><i id="season-progress"></i></div>
+          </div>
+        </div>
+        <div class="weather-rows">
+          <div><span>气温</span><b id="wx-temp">16.2°C</b></div>
+          <div><span>风速</span><b id="wx-wind">2.4 m/s</b></div>
+          <div><span>能见度</span><b id="wx-vis">8.6 km</b></div>
+        </div>
+      </section>
+
+      <section class="rail-block">
+        <div class="rail-head"><span>场景性能</span><em>RENDER</em></div>
+        <div class="perf">
+          <div><span>FPS</span><b id="stat-fps">60</b></div>
+          <div><span>粒子</span><b id="stat-particles">1,480</b></div>
+          <div><span>绘制批次</span><b id="stat-calls">—</b></div>
+          <div><span>交互对象</span><b id="stat-entries">22</b></div>
+        </div>
+      </section>
+
+      <section class="rail-block rail-note">
+        <div class="rail-head"><span>场景服务</span><em>SCENE→ERP</em></div>
+        <p>场景设施已映射至报销科目。点击建筑或资产，档案会同步至右侧面板，可直接生成报销单据。</p>
+      </section>
+    </aside>
+
+    <section class="quest" id="quest">
+      <div class="quest-top">
+        <div class="quest-title"><span>NPC 任务链</span><em>REIMBURSEMENT FLOW</em></div>
+        <div class="quest-id">NO. <b id="quest-no">GW-1122-08</b></div>
+      </div>
+      <div class="quest-steps" id="quest-steps">
+        <div class="qline"><i id="qline-fill"></i></div>
+        <div class="qstep" data-step="0">
+          <div class="qdot"><span>01</span></div>
+          <div class="qcopy"><b>取票 · 票据箱</b><span>林晓 · 报销专员</span></div>
+          <em class="qstate">前往中</em>
+        </div>
+        <div class="qstep" data-step="1">
+          <div class="qdot"><span>02</span></div>
+          <div class="qcopy"><b>提交 · 审批终端</b><span>林晓 · 报销专员</span></div>
+          <em class="qstate">等待</em>
+        </div>
+        <div class="qstep" data-step="2">
+          <div class="qdot"><span>03</span></div>
+          <div class="qcopy"><b>审批 · 财务室</b><span>苏禾 · 财务复核</span></div>
+          <em class="qstate">等待</em>
+        </div>
+      </div>
+    </section>
+
+    <div class="scene-hint">
+      <span class="mouse-ico"></span>
+      拖动旋转 · 滚轮缩放 · 点击建筑进入报销
+      <em>GOODWORK AUTO ATELIER — NIGHT SHIFT</em>
+    </div>
+
+    <aside class="dossier" id="dossier" aria-label="场景资产档案">
+      <div class="dossier-inner" id="dossier-inner"></div>
+    </aside>
+
+    <div class="toast-stack" id="toast-stack"></div>
+
+    <div id="form-scrim" class="form-scrim"></div>
+
+    <aside class="form-drawer" id="form-drawer" aria-label="费用报销申请">
+      <div class="form-head">
+        <div class="form-kicker"><span>REIMBURSEMENT</span><em id="form-no">GW-2026-1122-081</em></div>
+        <button class="close-btn" id="form-close" aria-label="关闭表单">
+          <svg viewBox="0 0 20 20"><path d="M5 5l10 10M15 5 5 15"/></svg>
+        </button>
+        <h2>费用报销申请</h2>
+        <div class="form-source">
+          <span class="live-dot"></span>
+          场景单据已自动带入
+          <b id="form-source-label">GOODWORK 古德車房</b>
+          <i id="form-source-code">GW-01</i>
+        </div>
+      </div>
+
+      <div class="form-body" id="form-body">
+        <div class="form-steps" id="form-steps">
+          <div class="fstep is-active"><i>01</i><b>场景取数</b><span>自动</span></div>
+          <div class="fstep"><i>02</i><b>凭证填写</b><span>人工</span></div>
+          <div class="fstep"><i>03</i><b>审批流</b><span>2 级</span></div>
+        </div>
+
+        <form id="claim-form" autocomplete="off">
+          <section class="fsec">
+            <header><span>01 / 场景取数</span><em>SCENE CAPTURE</em></header>
+            <div class="scene-capture">
+              <div class="cap-icon">
+                <svg viewBox="0 0 32 32"><path d="M5 12 16 5l11 7v14H5V12Z"/><path d="M11 26V17h10v9" opacity=".55"/><path d="M5 12h22" opacity=".35"/></svg>
+              </div>
+              <div class="cap-main">
+                <b id="cap-title">GOODWORK 古德車房</b>
+                <span id="cap-sub">维修工位 · 设备保养科目</span>
+                <div class="cap-tags"><i>场景联动</i><i>发票 2 张</i><i>自动核算</i></div>
+              </div>
+              <div class="cap-amount">
+                <span>建议金额</span>
+                <b id="cap-amount">¥ 12,800.00</b>
+              </div>
+            </div>
+          </section>
+
+          <section class="fsec">
+            <header><span>02 / 凭证信息</span><em>VOUCHER</em></header>
+            <div class="fields">
+              <label class="field">
+                <span>报销类别</span>
+                <select id="f-category">
+                  <option>设备维修与保养</option>
+                  <option>设备采购</option>
+                  <option>差旅与交通</option>
+                  <option>水电与物业</option>
+                  <option>耗材与办公</option>
+                  <option>门店运营</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>报销主体</span>
+                <select id="f-entity">
+                  <option>GOODWORK 古德車房</option>
+                  <option>财务室</option>
+                  <option>仓储中心</option>
+                  <option>员工宿舍</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>含税金额</span>
+                <div class="amount-input"><i>¥</i><input id="f-amount" type="number" min="0" step="100" value="12800" required /></div>
+              </label>
+              <label class="field">
+                <span>费用日期</span>
+                <input id="f-date" type="date" value="2026-11-22" />
+              </label>
+              <label class="field">
+                <span>发票号码</span>
+                <input id="f-invoice" type="text" value="INV-2026-1122-4417" />
+              </label>
+              <label class="field">
+                <span>收款方</span>
+                <input id="f-vendor" type="text" value="古德車房设备服务部" />
+              </label>
+              <label class="field wide">
+                <span>成本中心</span>
+                <select id="f-cost">
+                  <option>GW-STORE-01 · 门店运营</option>
+                  <option>GW-FIN-02 · 财务共享</option>
+                  <option>GW-DEPOT-03 · 仓储物流</option>
+                  <option>GW-DORM-04 · 员工保障</option>
+                </select>
+              </label>
+              <label class="field wide">
+                <span>事项说明</span>
+                <textarea id="f-note" rows="3">门店一层举升机液压系统季度保养，含密封件更换与安全复检。</textarea>
+              </label>
+            </div>
+
+            <div class="attach-row">
+              <button type="button" class="attach-btn" id="attach-btn">
+                <svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></svg>
+                添加发票附件
+              </button>
+              <div class="attach-list" id="attach-list">
+                <span class="attach-chip">INV-4417.pdf <i>已验真</i></span>
+                <span class="attach-chip">保养工单.jpg <i>已验真</i></span>
+              </div>
+            </div>
+          </section>
+
+          <section class="fsec">
+            <header><span>03 / 支付与审批</span><em>APPROVAL</em></header>
+            <div class="pay-row" id="pay-row">
+              <button type="button" class="pay-opt is-active" data-pay="对公转账">对公转账</button>
+              <button type="button" class="pay-opt" data-pay="企业卡">企业卡</button>
+              <button type="button" class="pay-opt" data-pay="员工垫付">员工垫付</button>
+            </div>
+            <div class="approval-chain">
+              <div class="apar is-done"><i>1</i><div><b>陈默</b><span>财务中心 / 复核</span></div><em>已就绪</em></div>
+              <div class="apar-line"></div>
+              <div class="apar"><i>2</i><div><b>苏禾</b><span>财务复核 / 场景审批</span></div><em>待处理</em></div>
+              <div class="apar-line"></div>
+              <div class="apar"><i>3</i><div><b>自动出纳</b><span>付款排程</span></div><em>排队</em></div>
+            </div>
+          </section>
+
+          <div class="form-success" id="form-success">
+            <div class="success-mark"><svg viewBox="0 0 40 40"><path d="M10 21l7 7 14-16"/></svg></div>
+            <b>单据已提交审批</b>
+            <span>NPC 林晓已接收任务，正在前往票据箱取票。</span>
+            <div class="success-code" id="success-code">GW-2026-1122-081</div>
+            <button class="success-back" id="success-back">返回三维场景</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="form-foot">
+        <div class="total"><span>合计金额</span><b id="form-total">¥12,800.00</b><em id="form-tax">含税 · 13% 可抵扣</em></div>
+        <div class="foot-actions">
+          <button class="ghost-btn" id="form-cancel">取消</button>
+          <button class="primary-btn" id="form-submit">提交审批</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="boot" id="boot">
+      <div class="boot-mark">GW</div>
+      <div class="boot-title">GOODWORK<span>古德車房 · 三维财务报销工作台</span></div>
+      <div class="boot-line"><i id="boot-fill"></i></div>
+      <div class="boot-status"><span id="boot-text">正在构建场景几何</span><em id="boot-pct">0%</em></div>
+      <div class="boot-foot">DEEP SPACE STAGE / SEASONAL SYSTEM / 22 INTERACTIVE ASSETS</div>
+    </div>
+
+    <div class="fatal" id="fatal" hidden>
+      <b>场景无法启动</b>
+      <p id="fatal-msg">当前浏览器需要启用 WebGL 2。</p>
+    </div>
+  </div>
+
+</body>
+</html>
