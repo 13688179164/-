@@ -1,0 +1,20 @@
+{
+  "name": "goodwork-garage-world",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GOODWORK 古德車房 · 悬浮生态财务工作台 — 深空玻璃立方体中的可交互微缩世界",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "serve": "python3 -m http.server 8080"
+  },
+  "keywords": [
+    "threejs",
+    "miniature-world",
+    "seasons",
+    "webgl",
+    "reimbursement"
+  ],
+  "license": "MIT"
+}
