@@ -542,10 +542,20 @@ body.form-submitted .form-foot #form-cancel { display: none; }
 .boot-status { width: 220px; display: flex; justify-content: space-between; margin-top: 10px; font-family: var(--font-mono); font-size: 7px; letter-spacing: 0.08em; color: var(--muted-2); }
 .boot-status em { font-style: normal; color: var(--gold); }
 .boot-foot { position: absolute; bottom: 34px; font-family: var(--font-mono); font-size: 6.5px; letter-spacing: 0.16em; color: rgba(139,142,147,0.36); }
-.fatal { position: absolute; inset: 0; z-index: 95; background: #05070b; display: grid; place-content: center; text-align: center; gap: 10px; }
+.fatal { position: absolute; inset: 0; z-index: 95; background: rgba(5,7,11,0.97); display: grid; place-items: center; padding: 24px; }
 .fatal[hidden] { display: none; }
-.fatal b { font-family: var(--font-display); color: var(--gold-hi); font-size: 22px; font-weight: 400; }
-.fatal p { margin: 0; color: var(--muted); font-size: 11px; }
+.fatal-panel { width: min(560px, 100%); padding: 26px 28px; border: 1px solid rgba(216,184,120,0.28); background: linear-gradient(165deg, rgba(14,17,23,0.96), rgba(7,9,13,0.98)); box-shadow: 0 30px 100px rgba(0,0,0,0.55); }
+.fatal-kicker { font-family: var(--font-mono); font-size: 7px; letter-spacing: 0.22em; color: var(--gold-deep); }
+.fatal b { display: block; margin-top: 10px; font-family: var(--font-display); color: var(--gold-hi); font-size: 27px; font-weight: 400; }
+.fatal p { margin: 10px 0 0; color: #b7afa0; font-size: 11px; line-height: 1.8; }
+.fatal-help { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.fatal-help span { display: block; font-size: 8px; letter-spacing: 0.14em; color: var(--gold); margin-bottom: 8px; }
+.fatal-help ol { margin: 0; padding-left: 18px; color: var(--muted); font-size: 9.5px; line-height: 1.9; }
+.fatal-help code { font-family: var(--font-mono); font-size: 8.5px; color: #cfc6b3; background: rgba(255,255,255,0.04); padding: 1px 4px; }
+.fatal-actions { display: flex; align-items: center; gap: 14px; margin-top: 20px; }
+.fatal-actions button { height: 34px; padding: 0 16px; border: 1px solid rgba(216,184,120,0.5); background: rgba(216,184,120,0.12); color: var(--gold-hi); font-size: 9px; letter-spacing: 0.12em; }
+.fatal-actions button:hover { background: rgba(216,184,120,0.2); }
+.fatal-actions span { font-family: var(--font-mono); font-size: 7.5px; color: var(--muted-2); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1450px) {

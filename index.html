@@ -329,8 +329,24 @@
     </div>
 
     <div class="fatal" id="fatal" hidden>
-      <b>场景无法启动</b>
-      <p id="fatal-msg">当前浏览器需要启用 WebGL 2。</p>
+      <div class="fatal-panel">
+        <div class="fatal-kicker">RENDER PIPELINE / ERROR</div>
+        <b>场景无法启动</b>
+        <p id="fatal-msg">当前浏览器需要启用 WebGL 2。</p>
+        <div class="fatal-help">
+          <span>排查建议</span>
+          <ol>
+            <li>使用最新版 Chrome / Edge，并在「设置 → 系统」中开启「使用图形加速」后重启浏览器。</li>
+            <li>访问 <code>chrome://gpu</code>，确认 WebGL2 显示为 <code>Hardware accelerated</code>。</li>
+            <li>远程桌面或无 GPU 环境，可用 <code>--enable-unsafe-swiftshader</code> 参数启动 Chrome。</li>
+            <li>请勿在 IDE 内置预览或禁用了 WebGL 的浏览器中打开，复制地址到完整浏览器访问。</li>
+          </ol>
+        </div>
+        <div class="fatal-actions">
+          <button id="fatal-retry" type="button">重新检测</button>
+          <span id="fatal-diag">WebGL2 · 正在检测</span>
+        </div>
+      </div>
     </div>
   </div>
 

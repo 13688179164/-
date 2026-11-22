@@ -83,16 +83,48 @@ function bootStep(pct, text) {
   $('boot-text').textContent = text;
 }
 
-function nextFrame() {
-  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+function webgl2Available() {
+  try {
+    const probe = document.createElement('canvas');
+    const gl = probe.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
+    if (!gl) return false;
+    const ext = gl.getExtension('WEBGL_lose_context');
+    if (ext) ext.loseContext();
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
+let bootComplete = false;
+let fatalBound = false;
+
 function fatal(err) {
-  console.error(err);
+  console.error('[GOODWORK] fatal:', err);
   const boot = $('boot');
   if (boot) boot.classList.add('hide');
-  $('fatal').hidden = false;
-  $('fatal-msg').textContent = err && err.message ? err.message : '当前浏览器需要开启 WebGL 2 与硬件加速。';
+  const fatalEl = $('fatal');
+  if (!fatalEl) return;
+  fatalEl.hidden = false;
+  const message = err && err.message ? err.message : '浏览器未能创建 WebGL 2 上下文。';
+  $('fatal-msg').textContent = message;
+  const supported = webgl2Available();
+  $('fatal-diag').textContent = `WebGL2 · ${supported ? '可用' : '不可用'} · ${navigator.userAgent.includes('Headless') ? 'HEADLESS' : 'BROWSER'}`;
+  if (!fatalBound) {
+    fatalBound = true;
+    $('fatal-retry').addEventListener('click', () => window.location.reload());
+  }
+}
+
+window.addEventListener('error', (event) => {
+  if (!bootComplete) fatal(event.error || new Error(event.message || '初始化错误'));
+});
+window.addEventListener('unhandledrejection', (event) => {
+  if (!bootComplete) fatal(event.reason || new Error('初始化时发生未处理的 Promise 错误'));
+});
+
+function nextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 }
 
 /* ---------------- camera choreography ---------------- */
@@ -405,6 +437,11 @@ async function start() {
     bootStep(6, '初始化渲染管线');
     await nextFrame();
 
+    if (!webgl2Available()) {
+      throw new Error('浏览器未能创建 WebGL 2 上下文。请开启硬件加速，或使用最新版 Chrome / Edge 打开。');
+    }
+    console.info(`[GOODWORK] WebGL2 ready · ${navigator.userAgent}`);
+
     renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: false,
@@ -601,6 +638,7 @@ async function start() {
 
     lastFrame = performance.now();
     requestAnimationFrame(animate);
+    bootComplete = true;
 
     controls.addEventListener('start', () => {
       if (state.intro) skipIntro();
