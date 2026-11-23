@@ -5,7 +5,7 @@
 import {
   DEPARTMENTS, DEPT_CATEGORIES, STATUS_LIST, STATUS_MAP,
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
-  createSampleTasks,
+  createSampleTasks, BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js';
 
 /* ------------------------------------------------------------------ */
@@ -13,6 +13,7 @@ import {
 /* ------------------------------------------------------------------ */
 
 const TASKS_KEY = 'goodwork.reimburse.tasks.v3';
+const PROCESSED_KEY = 'goodwork.reimburse.processed.v1';
 const SETTINGS_KEY = 'goodwork.reimburse.settings.v3';
 const DB_NAME = 'goodwork-reimburse';
 const DB_VERSION = 1;
@@ -86,6 +87,25 @@ function nowTimeValue() {
   const d = new Date();
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+function currentMonthValue(d = new Date()) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+}
+function monthRange(month) {
+  const [y, m] = String(month).split('-').map(Number);
+  const start = `${y}-${pad(m)}-01`;
+  const last = new Date(y, m, 0).getDate();
+  return { start, end: `${y}-${pad(m)}-${pad(last)}`, last, year: y, month: m };
+}
+function localTimeFromIso(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function localDateTimeFromIso(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return `${toDateKey(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 function uid(prefix = 'GW') {
   if (crypto?.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -146,6 +166,7 @@ const ICON = {
   check: '<svg viewBox="0 0 16 16" fill="none"><path d="M3 8.4l3.2 3.2L13 4.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   chevronLeft: '<svg viewBox="0 0 24 24" fill="none"><path d="M14.5 6l-6 6 6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   chevronRight: '<svg viewBox="0 0 24 24" fill="none"><path d="M9.5 6l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  chevronDown: '<svg viewBox="0 0 24 24" fill="none"><path d="M6 9.5l6 6 6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   drop: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 4v10M8 10.5l4 4 4-4M6 19h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
@@ -222,11 +243,18 @@ export class ReimburseBoard {
   constructor({ onClose, onToast } = {}) {
     this.onClose = onClose || (() => {});
     this.onToast = onToast || (() => {});
+    this._seededTasks = false;
     this.tasks = this.loadTasks();
+    this.processedEvents = this.loadProcessedEvents();
     this.settings = this.loadSettings();
     this.viewDate = toDateKey();
     this.exportStart = this.settings.exportStart || monthStartKey();
     this.exportEnd = this.settings.exportEnd || toDateKey();
+    this.filterApplicant = 'all';
+    this.filterInvoice = 'all';
+    this.filterStart = this.viewDate;
+    this.filterEnd = this.viewDate;
+    this.lastProcessedTotal = -1;
     this.openFlag = false;
     this.closing = false;
     this.drawerOpen = false;
@@ -240,6 +268,13 @@ export class ReimburseBoard {
     this.drag = null;
     this.suppressClick = false;
     this.reportOpen = false;
+    this.invoiceOpen = false;
+    this.invoiceTab = 'pending';
+    this.invoiceFilterApplicant = 'all';
+    this.invoiceFilterStart = '';
+    this.invoiceFilterEnd = '';
+    this.statementOpen = false;
+    this.statementMonth = currentMonthValue();
     this.previewUrl = null;
     this.folderHandle = null;
     this.folderStatus = 'checking';
@@ -261,6 +296,7 @@ export class ReimburseBoard {
       if (raw === null) {
         const samples = createSampleTasks();
         localStorage.setItem(TASKS_KEY, JSON.stringify(samples));
+        this._seededTasks = true;
         return samples;
       }
       const parsed = JSON.parse(raw);
@@ -269,8 +305,88 @@ export class ReimburseBoard {
     } catch (err) {
       console.warn('报销数据读取失败，使用示例数据', err);
       const samples = createSampleTasks();
+      this._seededTasks = true;
       try { localStorage.setItem(TASKS_KEY, JSON.stringify(samples)); } catch { /* noop */ }
       return samples;
+    }
+  }
+
+  loadProcessedEvents() {
+    try {
+      const raw = localStorage.getItem(PROCESSED_KEY);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      }
+      if (this._seededTasks) {
+        const seeded = this.tasks.find((t) => t.status === 'reimbursed');
+        if (seeded) {
+          const event = this.makeProcessedEvent(seeded);
+          try { localStorage.setItem(PROCESSED_KEY, JSON.stringify([event])); } catch { /* noop */ }
+          return [event];
+        }
+      }
+    } catch (err) {
+      console.warn('已处理记录读取失败', err);
+    }
+    return [];
+  }
+
+  makeProcessedEvent(task) {
+    const now = new Date();
+    return {
+      id: uid('evt'),
+      taskId: task.id,
+      eventDate: toDateKey(now),
+      timestamp: now.toISOString(),
+      amount: Number(task.amount) || 0,
+      applicant: task.applicant,
+      department: task.department,
+      category: task.category,
+      content: task.content,
+      hasInvoice: !!task.hasInvoice,
+    };
+  }
+
+  persistProcessed() {
+    try {
+      localStorage.setItem(PROCESSED_KEY, JSON.stringify(this.processedEvents));
+    } catch (err) {
+      console.warn('已处理记录保存失败', err);
+    }
+  }
+
+  recordProcessed(task, fromStatus, toStatus) {
+    if (fromStatus !== 'pending' || toStatus !== 'reimbursed') return;
+    const today = toDateKey();
+    const existing = this.processedEvents.find((e) => e.taskId === task.id && e.eventDate === today);
+    if (existing) {
+      existing.amount = Number(task.amount) || 0;
+      existing.applicant = task.applicant;
+      existing.department = task.department;
+      existing.category = task.category;
+      existing.content = task.content;
+      existing.hasInvoice = !!task.hasInvoice;
+      existing.timestamp = new Date().toISOString();
+    } else {
+      this.processedEvents.push(this.makeProcessedEvent(task));
+    }
+    this.persistProcessed();
+  }
+
+  removeProcessed(taskId) {
+    const today = toDateKey();
+    const before = this.processedEvents.length;
+    this.processedEvents = this.processedEvents.filter((e) => !(e.taskId === taskId && e.eventDate === today));
+    if (this.processedEvents.length !== before) this.persistProcessed();
+  }
+
+  syncProcessed(task, fromStatus) {
+    const hasEvent = this.processedEvents.some((e) => e.taskId === task.id && e.eventDate === toDateKey());
+    if (task.status === 'reimbursed' && (fromStatus === 'pending' || hasEvent)) {
+      this.recordProcessed(task, 'pending', 'reimbursed');
+    } else if (task.status !== 'reimbursed' && hasEvent) {
+      this.removeProcessed(task.id);
     }
   }
 
@@ -296,6 +412,11 @@ export class ReimburseBoard {
         written: !!a.written,
         voucherName: a.voucherName || '',
       })) : [],
+      collapsed: !!t.collapsed,
+      invoiceReceived: !!t.invoiceReceived,
+      invoiceReceivedAt: t.invoiceReceivedAt || null,
+      reimbursedAt: t.reimbursedAt || null,
+      reimbursedFrom: t.reimbursedFrom || null,
       order: Number.isFinite(Number(t.order)) ? Number(t.order) : Date.now(),
       createdAt: t.createdAt || new Date().toISOString(),
       updatedAt: t.updatedAt || new Date().toISOString(),
@@ -383,18 +504,35 @@ export class ReimburseBoard {
             <button type="button" class="rb-today-btn" data-rb="today">回到今天</button>
           </div>
           <div class="rb-top-actions">
+            <button type="button" class="rb-invoice-btn" data-rb="invoice" title="发票追踪 · 自动抓取已报销中有发票的记录">
+              ${ICON.invoice}<span>发票追踪</span><b class="rb-inv-badge" id="rbInvoiceBadge">0</b>
+            </button>
             <button type="button" class="rb-new-btn" data-rb="new">${ICON.plus}<span>新增报销</span></button>
             <button type="button" class="rb-back-btn" data-rb="close">${ICON.back}<span>返回场景</span></button>
           </div>
         </header>
 
+        <section class="rb-processed" id="rbProcessed">
+          <div class="rb-processed-main">
+            <span class="rb-processed-kicker"><i></i>TODAY PROCESSED · 当日已处理待报销</span>
+            <div class="rb-processed-value">
+              <b id="rbProcessedAmount">¥0.00</b>
+              <span id="rbProcessedCount">0 笔</span>
+            </div>
+          </div>
+          <div class="rb-processed-list" id="rbProcessedList"></div>
+          <button type="button" class="rb-btn ghost rb-processed-export" data-rb="processed-export" id="rbProcessedExport">
+            ${ICON.excel}<span>导出本月日报</span>
+          </button>
+        </section>
+
         <section class="rb-hero">
           <div class="rb-hero-main">
-            <div class="rb-eyebrow"><i></i><span>今日未完成报销 / UNFINISHED</span></div>
+            <div class="rb-eyebrow"><i></i><span id="rbHeroEyebrow">今日未完成报销 / UNFINISHED</span></div>
             <div class="rb-pct-wrap">
               <span class="rb-pct" id="rbPct">0.0</span><em class="rb-pct-sign">%</em>
             </div>
-            <div class="rb-pct-label">未完成报销 <span>待报销金额 / 当日总金额</span></div>
+            <div class="rb-pct-label">未完成报销 <span id="rbHeroScope">待报销金额 / 当日总金额</span></div>
             <div class="rb-mini-row">
               <span><b id="rbHeroCount">0</b> 笔申请</span>
               <span><b id="rbHeroInvoice">0%</b> 有发票</span>
@@ -405,7 +543,7 @@ export class ReimburseBoard {
 
           <div class="rb-hero-progress">
             <div class="rb-progress-head">
-              <span>今日报销构成</span>
+              <span id="rbHeroComposition">今日报销构成</span>
               <b id="rbHeroTotal">¥0.00</b>
             </div>
             <div class="rb-progress" id="rbProgress" aria-label="今日报销金额分段进度">
@@ -451,6 +589,39 @@ export class ReimburseBoard {
               <button type="button" class="rb-folder-btn" data-rb="folder">绑定</button>
             </div>
           </div>
+        </section>
+
+        <section class="rb-filterbar" id="rbFilterBar" aria-label="报销筛选查询">
+          <div class="rb-filter-lead">
+            <span>QUERY</span>
+            <b>筛选查询</b>
+          </div>
+          <label class="rb-filter-field">
+            <span>申请人</span>
+            <select id="rbFilterApplicant" aria-label="按申请人筛选"></select>
+          </label>
+          <label class="rb-filter-field">
+            <span>是否有发票</span>
+            <select id="rbFilterInvoice" aria-label="按是否有发票筛选">
+              <option value="all">全部</option>
+              <option value="yes">有发票</option>
+              <option value="no">无发票</option>
+            </select>
+          </label>
+          <div class="rb-filter-field rb-filter-date">
+            <span>申请日期</span>
+            <div class="rb-filter-range">
+              <input type="date" id="rbFilterStart" aria-label="申请日期开始" />
+              <em>→</em>
+              <input type="date" id="rbFilterEnd" aria-label="申请日期结束" />
+            </div>
+          </div>
+          <div class="rb-filter-actions">
+            <button type="button" class="rb-filter-chip" data-rb="filter-today">今天</button>
+            <button type="button" class="rb-filter-chip" data-rb="filter-month">本月</button>
+            <button type="button" class="rb-filter-chip" data-rb="filter-reset">重置</button>
+          </div>
+          <span class="rb-filter-result" id="rbFilterResult">0 笔</span>
         </section>
 
         <main class="rb-kanban" id="rbKanban">${statusColumns}</main>
@@ -505,11 +676,72 @@ export class ReimburseBoard {
               <p id="rbReportRange"></p>
             </div>
             <div class="rb-report-head-actions">
+              <button type="button" class="rb-btn ghost" data-rb="statement">${ICON.report}<span>月度财务报表</span></button>
               <button type="button" class="rb-btn ghost" data-rb="report-export">${ICON.excel}<span>导出 Excel</span></button>
               <button type="button" class="rb-icon-btn" data-rb="report-close" aria-label="关闭报告">${ICON.close}</button>
             </div>
           </header>
           <div class="rb-report-body" id="rbReportBody"></div>
+        </div>
+      </div>
+
+      <div class="rb-modal rb-invoice-modal" id="rbInvoiceModal" aria-hidden="true">
+        <div class="rb-invoice-sheet">
+          <header class="rb-report-head">
+            <div>
+              <span class="rb-export-kicker">INVOICE TRACKING</span>
+              <h2>发票追踪</h2>
+              <p id="rbInvoiceMeta"></p>
+            </div>
+            <div class="rb-report-head-actions">
+              <button type="button" class="rb-icon-btn" data-rb="invoice-close" aria-label="关闭发票追踪">${ICON.close}</button>
+            </div>
+          </header>
+          <div class="rb-invoice-tabs">
+            <button type="button" class="rb-invoice-tab is-active" data-rb="invoice-tab" data-tab="pending">
+              未取得发票 <b id="rbInvoicePendingCount">0</b>
+            </button>
+            <button type="button" class="rb-invoice-tab" data-rb="invoice-tab" data-tab="received">
+              已取得发票 <b id="rbInvoiceReceivedCount">0</b>
+            </button>
+          </div>
+          <div class="rb-invoice-filters">
+            <label class="rb-filter-field">
+              <span>申请人</span>
+              <select id="rbInvoiceApplicant" aria-label="按申请人筛选发票"></select>
+            </label>
+            <div class="rb-filter-field rb-filter-date">
+              <span>时间范围</span>
+              <div class="rb-filter-range">
+                <input type="date" id="rbInvoiceStart" aria-label="发票记录开始日期" />
+                <em>→</em>
+                <input type="date" id="rbInvoiceEnd" aria-label="发票记录结束日期" />
+              </div>
+            </div>
+            <button type="button" class="rb-filter-chip" data-rb="invoice-reset">重置筛选</button>
+          </div>
+          <div class="rb-invoice-body" id="rbInvoiceBody"></div>
+        </div>
+      </div>
+
+      <div class="rb-modal rb-statement-modal" id="rbStatementModal" aria-hidden="true">
+        <div class="rb-statement-sheet">
+          <header class="rb-report-head">
+            <div>
+              <span class="rb-export-kicker">MONTHLY FINANCIAL STATEMENT</span>
+              <h2>月度财务报表</h2>
+              <p id="rbStatementMeta"></p>
+            </div>
+            <div class="rb-report-head-actions">
+              <label class="rb-month-picker">
+                <span>编制月份</span>
+                <input type="month" id="rbStatementMonth" aria-label="选择报表月份" />
+              </label>
+              <button type="button" class="rb-btn primary" data-rb="statement-export">${ICON.excel}<span>导出 Excel</span></button>
+              <button type="button" class="rb-icon-btn" data-rb="statement-close" aria-label="关闭月度财务报表">${ICON.close}</button>
+            </div>
+          </header>
+          <div class="rb-statement-body" id="rbStatementBody"></div>
         </div>
       </div>
 
@@ -568,6 +800,32 @@ export class ReimburseBoard {
       confirmText: $('#rbConfirmText', shell),
       preview: $('#rbPreviewModal', shell),
       previewContent: $('#rbPreviewContent', shell),
+      heroEyebrow: $('#rbHeroEyebrow', shell),
+      heroScope: $('#rbHeroScope', shell),
+      heroComposition: $('#rbHeroComposition', shell),
+      processedAmount: $('#rbProcessedAmount', shell),
+      processedCount: $('#rbProcessedCount', shell),
+      processedList: $('#rbProcessedList', shell),
+      processedExport: $('#rbProcessedExport', shell),
+      invoiceBadge: $('#rbInvoiceBadge', shell),
+      filterBar: $('#rbFilterBar', shell),
+      filterApplicantEl: $('#rbFilterApplicant', shell),
+      filterInvoiceEl: $('#rbFilterInvoice', shell),
+      filterStartEl: $('#rbFilterStart', shell),
+      filterEndEl: $('#rbFilterEnd', shell),
+      filterResult: $('#rbFilterResult', shell),
+      invoice: $('#rbInvoiceModal', shell),
+      invoiceMeta: $('#rbInvoiceMeta', shell),
+      invoiceApplicantEl: $('#rbInvoiceApplicant', shell),
+      invoiceStartEl: $('#rbInvoiceStart', shell),
+      invoiceEndEl: $('#rbInvoiceEnd', shell),
+      invoiceBody: $('#rbInvoiceBody', shell),
+      invoicePendingCount: $('#rbInvoicePendingCount', shell),
+      invoiceReceivedCount: $('#rbInvoiceReceivedCount', shell),
+      statement: $('#rbStatementModal', shell),
+      statementMonthEl: $('#rbStatementMonth', shell),
+      statementMeta: $('#rbStatementMeta', shell),
+      statementBody: $('#rbStatementBody', shell),
     };
     this.cardRects = new Map();
   }
@@ -597,13 +855,63 @@ export class ReimburseBoard {
       if (downloadAttach) {
         e.preventDefault();
         this.downloadAttachment(downloadAttach.dataset.downloadAttach);
+        return;
+      }
+      // 点击卡片主体折叠 / 展开
+      if (!this.suppressClick) {
+        const card = e.target.closest('.rb-card');
+        if (card && !e.target.closest('button, a, input, select, textarea')) {
+          this.toggleCardById(card.dataset.id);
+        }
       }
     });
 
     this.el.viewDate.addEventListener('change', () => {
       if (!this.el.viewDate.value) return;
       this.viewDate = this.el.viewDate.value;
+      this.filterStart = this.viewDate;
+      this.filterEnd = this.viewDate;
       this.renderAll();
+    });
+
+    const rerenderFiltered = () => {
+      const before = this.captureCardRects();
+      this.renderAll({ fromRects: before });
+    };
+    this.el.filterApplicantEl.addEventListener('change', () => {
+      this.filterApplicant = this.el.filterApplicantEl.value || 'all';
+      rerenderFiltered();
+    });
+    this.el.filterInvoiceEl.addEventListener('change', () => {
+      this.filterInvoice = this.el.filterInvoiceEl.value || 'all';
+      rerenderFiltered();
+    });
+    this.el.filterStartEl.addEventListener('change', () => {
+      this.filterStart = this.el.filterStartEl.value || this.viewDate;
+      if (this.filterEnd && this.filterStart > this.filterEnd) this.filterEnd = this.filterStart;
+      rerenderFiltered();
+    });
+    this.el.filterEndEl.addEventListener('change', () => {
+      this.filterEnd = this.el.filterEndEl.value || this.filterStart || this.viewDate;
+      if (this.filterStart && this.filterStart > this.filterEnd) this.filterStart = this.filterEnd;
+      rerenderFiltered();
+    });
+
+    this.el.invoiceApplicantEl.addEventListener('change', () => {
+      this.invoiceFilterApplicant = this.el.invoiceApplicantEl.value || 'all';
+      this.renderInvoice();
+    });
+    this.el.invoiceStartEl.addEventListener('change', () => {
+      this.invoiceFilterStart = this.el.invoiceStartEl.value || '';
+      this.renderInvoice();
+    });
+    this.el.invoiceEndEl.addEventListener('change', () => {
+      this.invoiceFilterEnd = this.el.invoiceEndEl.value || '';
+      this.renderInvoice();
+    });
+    this.el.statementMonthEl.addEventListener('change', () => {
+      this.statementMonth = this.el.statementMonthEl.value || currentMonthValue();
+      this.renderStatement();
     });
 
     this.el.exportStart.addEventListener('change', () => {
@@ -670,7 +978,14 @@ export class ReimburseBoard {
     this.root.addEventListener('pointerdown', (e) => this.onCardPointerDown(e));
     document.addEventListener('keydown', (e) => {
       if (!this.openFlag) return;
+      if ((e.key === 'Enter' || e.key === ' ') && e.target?.classList?.contains('rb-card')) {
+        e.preventDefault();
+        this.toggleCardById(e.target.dataset.id);
+        return;
+      }
       if (e.key !== 'Escape') return;
+      if (this.statementOpen) { this.closeStatement(); return; }
+      if (this.invoiceOpen) { this.closeInvoice(); return; }
       if ($('#rbPreviewModal', this.root).classList.contains('is-open')) { this.closePreview(); return; }
       if (this.el.confirm.classList.contains('is-open')) { this.closeConfirm(); return; }
       if (this.reportOpen) { this.closeReport(); return; }
@@ -686,7 +1001,12 @@ export class ReimburseBoard {
     this.openFlag = true;
     this.closing = false;
     this.viewDate = toDateKey();
+    this.filterStart = this.viewDate;
+    this.filterEnd = this.viewDate;
+    this.filterApplicant = 'all';
+    this.filterInvoice = 'all';
     this.lastPct = 0;
+    this.lastProcessedTotal = -1;
     this.renderAll({ animate: false });
     this.el.shell.scrollTop = 0;
     this.root.classList.add('is-open');
@@ -703,6 +1023,8 @@ export class ReimburseBoard {
     this.closing = true;
     this.closeDrawer(true);
     this.closeReport(true);
+    this.closeStatement(true);
+    this.closeInvoice(true);
     this.closeConfirm(true);
     this.cancelDrag();
     this.root.classList.remove('is-visible');
@@ -725,22 +1047,66 @@ export class ReimburseBoard {
       case 'new': this.openDrawer(); break;
       case 'prev-day':
         this.viewDate = addDays(this.viewDate, -1);
+        this.filterStart = this.viewDate;
+        this.filterEnd = this.viewDate;
         this.renderAll();
         break;
       case 'next-day':
         this.viewDate = addDays(this.viewDate, 1);
+        this.filterStart = this.viewDate;
+        this.filterEnd = this.viewDate;
         this.renderAll();
         break;
       case 'today':
         this.viewDate = toDateKey();
+        this.filterStart = this.viewDate;
+        this.filterEnd = this.viewDate;
         this.renderAll();
         break;
+      case 'filter-today':
+        this.viewDate = toDateKey();
+        this.filterStart = this.viewDate;
+        this.filterEnd = this.viewDate;
+        this.renderAll();
+        break;
+      case 'filter-month':
+        this.filterStart = monthStartKey();
+        this.filterEnd = toDateKey();
+        this.renderAll();
+        break;
+      case 'filter-reset':
+        this.filterApplicant = 'all';
+        this.filterInvoice = 'all';
+        this.viewDate = toDateKey();
+        this.filterStart = this.viewDate;
+        this.filterEnd = this.viewDate;
+        this.renderAll();
+        break;
+      case 'toggle-card': this.toggleCardById(el.dataset.id); break;
       case 'edit-task': this.openDrawer(el.dataset.id); break;
       case 'delete-task': this.openDeleteConfirm(el.dataset.id); break;
       case 'drawer-close': this.closeDrawer(); break;
       case 'report': this.openReport(); break;
       case 'report-close': this.closeReport(); break;
       case 'report-export': this.exportExcel(true); break;
+      case 'statement': this.openStatement(); break;
+      case 'statement-close': this.closeStatement(); break;
+      case 'statement-export': this.exportStatement(); break;
+      case 'processed-export': this.exportProcessed(); break;
+      case 'invoice': this.openInvoice(); break;
+      case 'invoice-close': this.closeInvoice(); break;
+      case 'invoice-tab':
+        this.invoiceTab = el.dataset.tab === 'received' ? 'received' : 'pending';
+        $$('.rb-invoice-tab', this.root).forEach((b) => b.classList.toggle('is-active', b.dataset.tab === this.invoiceTab));
+        this.renderInvoice();
+        break;
+      case 'invoice-reset':
+        this.invoiceFilterApplicant = 'all';
+        this.invoiceFilterStart = '';
+        this.invoiceFilterEnd = '';
+        this.renderInvoice();
+        break;
+      case 'invoice-mark': this.markInvoiceReceived(el.dataset.id); break;
       case 'export': this.exportExcel(false); break;
       case 'folder': this.folderAction(); break;
       case 'confirm-cancel': this.closeConfirm(); break;
@@ -753,8 +1119,32 @@ export class ReimburseBoard {
 
   /* ---------------- 渲染：整体 ---------------- */
 
+  filtersActive() {
+    return this.filterApplicant !== 'all'
+      || this.filterInvoice !== 'all'
+      || this.filterStart !== this.filterEnd
+      || this.filterStart !== this.viewDate;
+  }
+
+  scopeLabel() {
+    const today = toDateKey();
+    if (this.filterStart === this.filterEnd) {
+      return this.filterStart === today ? '今日' : `${this.filterStart}`;
+    }
+    if (this.filterStart === monthStartKey() && this.filterEnd === today) return '本月';
+    return '筛选范围';
+  }
+
   dayTasks() {
-    return this.tasks.filter((t) => dateKeyOf(t.appliedAt) === this.viewDate);
+    return this.tasks.filter((t) => {
+      const key = dateKeyOf(t.appliedAt);
+      if (this.filterStart && key < this.filterStart) return false;
+      if (this.filterEnd && key > this.filterEnd) return false;
+      if (this.filterApplicant !== 'all' && t.applicant !== this.filterApplicant) return false;
+      if (this.filterInvoice === 'yes' && !t.hasInvoice) return false;
+      if (this.filterInvoice === 'no' && t.hasInvoice) return false;
+      return true;
+    });
   }
 
   tasksByStatus(status) {
@@ -774,12 +1164,99 @@ export class ReimburseBoard {
   renderAll({ animate = true, fromRects = null } = {}) {
     const previous = fromRects || (animate ? this.captureCardRects() : new Map());
     this.el.viewDate.value = this.viewDate;
-    this.el.dayKicker.textContent = this.viewDate === toDateKey() ? '今天 / TODAY' : '历史日报 / ARCHIVE';
+    const scope = this.scopeLabel();
+    this.el.dayKicker.textContent = this.filtersActive()
+      ? (scope === '今日' ? '今天 / TODAY' : '筛选范围 / RANGE')
+      : (this.viewDate === toDateKey() ? '今天 / TODAY' : '历史日报 / ARCHIVE');
+    this.renderFilters();
     this.renderCards(previous);
     this.renderStats();
+    this.renderProcessed();
+    this.renderInvoiceBadge();
     this.renderExportMeta();
     this.renderFolderStatus();
     if (animate) this.animateNewCards();
+  }
+
+  renderFilters() {
+    const names = [...new Set(this.tasks.map((t) => t.applicant).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    if (this.filterApplicant !== 'all' && !names.includes(this.filterApplicant)) {
+      this.filterApplicant = 'all';
+    }
+    this.el.filterApplicantEl.innerHTML = [
+      '<option value="all">全部申请人</option>',
+      ...names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`),
+    ].join('');
+    this.el.filterApplicantEl.value = this.filterApplicant;
+    this.el.filterInvoiceEl.value = this.filterInvoice;
+    this.el.filterStartEl.value = this.filterStart;
+    this.el.filterEndEl.value = this.filterEnd;
+    const tasks = this.dayTasks();
+    const total = tasks.reduce((s, t) => s + t.amount, 0);
+    this.el.filterResult.innerHTML = tasks.length
+      ? `${this.filterStart}${this.filterStart === this.filterEnd ? '' : ' 至 ' + this.filterEnd} · <b>${tasks.length}</b> 笔 · ¥${money(total)}`
+      : `${this.filterStart}${this.filterStart === this.filterEnd ? '' : ' 至 ' + this.filterEnd} · 无匹配记录`;
+    this.el.filterBar?.classList.toggle('is-filtered', this.filtersActive());
+  }
+
+  renderProcessed() {
+    const today = toDateKey();
+    const events = this.processedEvents
+      .filter((e) => e.eventDate === today)
+      .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+    const total = events.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    this.el.processedAmount.textContent = `¥${money(total)}`;
+    this.el.processedCount.textContent = `${events.length} 笔 · 待报销 → 已报销`;
+    this.el.processedList.innerHTML = events.length
+      ? events.slice(0, 4).map((e) => `
+          <span class="rb-processed-chip">
+            <em>${localTimeFromIso(e.timestamp)}</em>
+            <b>${esc(e.applicant || '未填写')}</b>
+            <i>¥${money(e.amount)}</i>
+          </span>`).join('')
+      : '<span class="rb-processed-empty">今天还没有「待报销 → 已报销」的流转记录</span>';
+    this.el.processedExport.title = `导出 ${currentMonthValue()} 每日已处理待报销金额汇总`;
+    if (this.lastProcessedTotal >= 0 && Math.abs(total - this.lastProcessedTotal) > 0.001) {
+      this.el.processedAmount.classList.remove('is-bump');
+      void this.el.processedAmount.offsetWidth;
+      this.el.processedAmount.classList.add('is-bump');
+    }
+    this.lastProcessedTotal = total;
+  }
+
+  invoicePendingTasks() {
+    return this.tasks.filter((t) => t.status === 'reimbursed' && t.hasInvoice && !t.invoiceReceived);
+  }
+
+  invoiceReceivedTasks() {
+    return this.tasks.filter((t) => t.status === 'reimbursed' && t.hasInvoice && t.invoiceReceived);
+  }
+
+  renderInvoiceBadge() {
+    if (!this.el.invoiceBadge) return;
+    const pending = this.invoicePendingTasks().length;
+    this.el.invoiceBadge.textContent = String(pending);
+    this.el.invoiceBadge.classList.toggle('is-zero', pending === 0);
+    if (this.invoiceOpen) this.renderInvoice();
+  }
+
+  toggleCardById(id) {
+    const task = this.tasks.find((t) => t.id === id);
+    const card = $(`.rb-card[data-id="${CSS.escape(id)}"]`, this.root);
+    if (!task || !card) return;
+    task.collapsed = !task.collapsed;
+    this.persistTasks();
+    card.classList.toggle('is-collapsed', task.collapsed);
+    card.setAttribute('aria-expanded', String(!task.collapsed));
+    const btn = $('.rb-card-toggle', card);
+    if (btn) btn.setAttribute('aria-label', task.collapsed ? '展开报销详情' : '折叠报销详情');
+    if (task.collapsed) {
+      card.animate?.(
+        [{ boxShadow: '0 0 0 1px rgba(217,255,67,0.18)' }, { boxShadow: '0 0 0 1px rgba(217,255,67,0)' }],
+        { duration: 420, easing: 'ease-out' }
+      );
+    }
   }
 
   renderCards(previousRects = new Map()) {
@@ -791,6 +1268,16 @@ export class ReimburseBoard {
       $(`[data-sum="${status.id}"]`, this.root).textContent = `¥${money(tasks.reduce((s, t) => s + t.amount, 0))}`;
       list.innerHTML = tasks.map((t) => this.cardHtml(t)).join('');
       empty.classList.toggle('is-visible', tasks.length === 0);
+      const emptyLabel = empty.querySelector('span');
+      if (emptyLabel) {
+        emptyLabel.textContent = this.filtersActive()
+          ? '没有符合筛选条件的记录'
+          : status.id === 'pending'
+            ? '今天还没有待报销申请'
+            : status.id === 'reimbursed'
+              ? '还没有已报销记录'
+              : '还没有补充附件的记录';
+      }
     }
     // FLIP 布局动画
     if (previousRects.size) {
@@ -825,6 +1312,10 @@ export class ReimburseBoard {
     const supplementAmount = sum(supplemented);
     const pct = totalAmount > 0 ? (pendingAmount / totalAmount) * 100 : 0;
     this.lastPct = pct;
+    const scope = this.scopeLabel();
+    this.el.heroEyebrow.textContent = `${scope}未完成报销 / UNFINISHED`;
+    this.el.heroScope.textContent = `待报销金额 / ${scope}总金额`;
+    this.el.heroComposition.textContent = `${scope}报销构成`;
     this.el.pct.textContent = pct.toFixed(1);
     this.el.heroCount.textContent = String(count);
     const invoiceCount = tasks.filter((t) => t.hasInvoice).length;
@@ -882,13 +1373,13 @@ export class ReimburseBoard {
   }
 
   cardHtml(task) {
-    const status = STATUS_MAP[task.status];
     const files = task.attachments.length;
     const high = task.highValuePart;
     const invoice = task.hasInvoice;
     const cleanContent = esc(task.content).slice(0, 150);
+    const collapsed = !!task.collapsed;
     return `
-      <article class="rb-card rb-card--${task.status}" data-id="${esc(task.id)}" data-card-id="${esc(task.id)}" tabindex="0" aria-label="${esc(task.applicant)} ${esc(task.department)} ${money(task.amount)}">
+      <article class="rb-card rb-card--${task.status} ${collapsed ? 'is-collapsed' : ''}" data-id="${esc(task.id)}" data-card-id="${esc(task.id)}" tabindex="0" aria-expanded="${!collapsed}" aria-label="${esc(task.applicant)} ${esc(task.department)} ${money(task.amount)}，点击${collapsed ? '展开' : '折叠'}详情">
         <div class="rb-card-glow"></div>
         <header class="rb-card-top">
           <div class="rb-card-person">
@@ -901,16 +1392,21 @@ export class ReimburseBoard {
           <div class="rb-card-amount">¥${money(task.amount)}</div>
           <button type="button" class="rb-drag-handle" data-drag-handle aria-label="拖拽排序">${ICON.grip}</button>
         </header>
-        <p class="rb-card-content">${cleanContent || '未填写报销内容'}</p>
-        <div class="rb-card-badges">
-          <span class="rb-badge ${invoice ? 'rb-badge--ok' : 'rb-badge--warn'}">${invoice ? '有发票' : '无发票'}</span>
-          ${high ? `<span class="rb-badge rb-badge--high">高额配件成本属性</span>` : ''}
-          ${files ? `<span class="rb-badge rb-badge--file">${ICON.paperclip}<span>附件 ${files}</span></span>` : ''}
+        <div class="rb-card-body">
+          <div class="rb-card-body-inner">
+            <p class="rb-card-content">${cleanContent || '未填写报销内容'}</p>
+            <div class="rb-card-badges">
+              <span class="rb-badge ${invoice ? 'rb-badge--ok' : 'rb-badge--warn'}">${invoice ? '有发票' : '无发票'}</span>
+              ${high ? `<span class="rb-badge rb-badge--high">高额配件成本属性</span>` : ''}
+              ${files ? `<span class="rb-badge rb-badge--file">${ICON.paperclip}<span>附件 ${files}</span></span>` : ''}
+            </div>
+            ${high ? `<div class="rb-high-note">跨月：${task.crossMonth ? '是' : '否'} · 备货成本：${task.stockingCost ? '是' : '否'}</div>` : ''}
+          </div>
         </div>
-        ${high ? `<div class="rb-high-note">跨月：${task.crossMonth ? '是' : '否'} · 备货成本：${task.stockingCost ? '是' : '否'}</div>` : ''}
         <footer class="rb-card-foot">
           <span class="rb-card-time">${ICON.invoice}<span>${formatDateTime(task.appliedAt)}</span></span>
           <div class="rb-card-actions">
+            <button type="button" class="rb-card-action rb-card-toggle" data-rb="toggle-card" data-id="${esc(task.id)}" aria-label="${collapsed ? '展开报销详情' : '折叠报销详情'}" title="${collapsed ? '展开' : '折叠'}">${ICON.chevronDown}</button>
             <button type="button" class="rb-card-action" data-rb="edit-task" data-id="${esc(task.id)}" aria-label="编辑此报销">${ICON.edit}</button>
             <button type="button" class="rb-card-action danger" data-rb="delete-task" data-id="${esc(task.id)}" aria-label="删除此报销">${ICON.trash}</button>
           </div>
@@ -1303,6 +1799,15 @@ export class ReimburseBoard {
         crossMonth: highValue ? !!d.crossMonth : null,
         stockingCost: highValue ? !!d.stockingCost : null,
         attachments: [],
+        collapsed: original ? !!original.collapsed : false,
+        invoiceReceived: original ? !!original.invoiceReceived : false,
+        invoiceReceivedAt: original?.invoiceReceivedAt || null,
+        reimbursedAt: (STATUS_MAP[d.status] ? d.status : 'pending') === 'reimbursed'
+          ? (original?.reimbursedAt || now)
+          : null,
+        reimbursedFrom: (STATUS_MAP[d.status] ? d.status : 'pending') === 'reimbursed'
+          ? (original?.reimbursedFrom || 'pending')
+          : null,
         order: original ? original.order : this.nextOrder(d.status),
         createdAt: original?.createdAt || now,
         updatedAt: now,
@@ -1351,8 +1856,11 @@ export class ReimburseBoard {
       } else {
         this.tasks.unshift(task);
       }
+      this.syncProcessed(task, original ? original.status : null);
       this.persistTasks();
       this.viewDate = dateKeyOf(task.appliedAt);
+      this.filterStart = this.viewDate;
+      this.filterEnd = this.viewDate;
       this.closeDrawer(true);
       this.renderAll();
       this.cardRects = new Map();
@@ -1556,13 +2064,15 @@ export class ReimburseBoard {
     else if (next) newOrder = next.order - 10;
     else newOrder = this.nextOrder(targetStatus);
     const statusChanged = task.status !== targetStatus;
+    const fromStatus = task.status;
     task.status = targetStatus;
     task.order = newOrder;
     task.updatedAt = new Date().toISOString();
+    this.syncProcessed(task, fromStatus);
     this.persistTasks();
     this.renderAll({ fromRects: before });
     if (statusChanged) {
-      this.toast('状态已更新', `${task.applicant} · ¥${money(task.amount)} → ${STATUS_LABEL[targetStatus]}`, 'ok');
+      this.toast('状态已更新', `${task.applicant} · ¥${money(task.amount)} → ${STATUS_LABEL[targetStatus]}${targetStatus === 'reimbursed' ? '，已计入当日已处理待报销' : ''}`, 'ok');
     }
   }
 
@@ -1981,14 +2491,510 @@ export class ReimburseBoard {
     this.reportOpen = true;
     this.el.report.classList.add('is-open');
     this.el.report.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('is-reimburse-modal');
+    this.syncModalBodyClass();
   }
 
   closeReport(immediate = false) {
     this.reportOpen = false;
     this.el.report.classList.remove('is-open');
     this.el.report.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('is-reimburse-modal');
+    this.syncModalBodyClass();
+  }
+
+  syncModalBodyClass() {
+    document.body.classList.toggle(
+      'is-reimburse-modal',
+      this.reportOpen || this.invoiceOpen || this.statementOpen
+    );
+  }
+
+  /* ---------------- 发票追踪 ---------------- */
+
+  openInvoice() {
+    this.invoiceOpen = true;
+    this.el.invoice.classList.add('is-open');
+    this.el.invoice.setAttribute('aria-hidden', 'false');
+    this.syncModalBodyClass();
+    this.renderInvoice();
+  }
+
+  closeInvoice(immediate = false) {
+    this.invoiceOpen = false;
+    this.el.invoice.classList.remove('is-open');
+    this.el.invoice.setAttribute('aria-hidden', 'true');
+    this.syncModalBodyClass();
+  }
+
+  invoiceFilteredTasks(tab) {
+    const base = (tab === 'received' ? this.invoiceReceivedTasks() : this.invoicePendingTasks())
+      .filter((t) => this.invoiceFilterApplicant === 'all' || t.applicant === this.invoiceFilterApplicant);
+    return base
+      .filter((t) => {
+        const key = dateKeyOf(t.appliedAt);
+        if (this.invoiceFilterStart && key < this.invoiceFilterStart) return false;
+        if (this.invoiceFilterEnd && key > this.invoiceFilterEnd) return false;
+        return true;
+      })
+      .sort((a, b) => String(b.appliedAt).localeCompare(String(a.appliedAt)));
+  }
+
+  renderInvoice() {
+    const pending = this.invoicePendingTasks();
+    const received = this.invoiceReceivedTasks();
+    this.el.invoicePendingCount.textContent = String(pending.length);
+    this.el.invoiceReceivedCount.textContent = String(received.length);
+    const pendingAmount = pending.reduce((s, t) => s + t.amount, 0);
+    this.el.invoiceMeta.textContent = `自动抓取「已报销 + 有发票」记录 · 未取得 ${pending.length} 笔 · 待收发票金额 ¥${money(pendingAmount)}`;
+
+    const allInvoiceTasks = [...pending, ...received];
+    const names = [...new Set(allInvoiceTasks.map((t) => t.applicant).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    if (this.invoiceFilterApplicant !== 'all' && !names.includes(this.invoiceFilterApplicant)) {
+      this.invoiceFilterApplicant = 'all';
+    }
+    this.el.invoiceApplicantEl.innerHTML = [
+      '<option value="all">全部申请人</option>',
+      ...names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`),
+    ].join('');
+    this.el.invoiceApplicantEl.value = this.invoiceFilterApplicant;
+    this.el.invoiceStartEl.value = this.invoiceFilterStart;
+    this.el.invoiceEndEl.value = this.invoiceFilterEnd;
+
+    $$('.rb-invoice-tab', this.root).forEach((b) => b.classList.toggle('is-active', b.dataset.tab === this.invoiceTab));
+
+    const tasks = this.invoiceFilteredTasks(this.invoiceTab);
+    if (!tasks.length) {
+      this.el.invoiceBody.innerHTML = `
+        <div class="rb-invoice-empty">
+          <span>NO RECORDS</span>
+          <h3>${this.invoiceTab === 'pending' ? '没有未取得发票的记录' : '还没有已取得发票的记录'}</h3>
+          <p>${this.invoiceTab === 'pending'
+            ? '当「已报销」列中出现有发票的申请时，会自动生成待取得发票记录。'
+            : '在「未取得发票」中点击「已取得发票」后，记录会归档到这里。'}</p>
+        </div>`;
+      return;
+    }
+    this.el.invoiceBody.innerHTML = tasks.map((t) => {
+      const vouchers = t.attachments?.length
+        ? t.attachments.map((a) => `
+            <button type="button" class="rb-inv-voucher" data-download-attach="${esc(a.id)}" title="下载凭证附件">
+              ${isImageFile({ name: a.name, type: a.type }) ? ICON.image : ICON.file}
+              <span>${esc(a.voucherName || a.name)}</span>
+            </button>`).join('')
+        : '<span class="rb-inv-novoucher">无凭证附件</span>';
+      return `
+        <article class="rb-inv-row">
+          <div class="rb-inv-main">
+            <div class="rb-inv-line">
+              <span class="rb-inv-avatar">${esc(t.applicant.slice(0, 1) || '?')}</span>
+              <b>${esc(t.applicant)}</b>
+              <em>${formatDateTime(t.appliedAt)}</em>
+              <span class="rb-badge">${esc(t.department)} · ${esc(t.category)}</span>
+              <span class="rb-badge rb-badge--ok">有发票</span>
+            </div>
+            <p class="rb-inv-content">${esc(t.content) || '未填写报销内容'}</p>
+            <div class="rb-inv-vouchers">${vouchers}</div>
+          </div>
+          <div class="rb-inv-side">
+            <b class="rb-inv-amount">¥${money(t.amount)}</b>
+            ${this.invoiceTab === 'pending'
+              ? `<button type="button" class="rb-btn primary" data-rb="invoice-mark" data-id="${esc(t.id)}">${ICON.check}<span>已取得发票</span></button>`
+              : `<span class="rb-inv-done">${ICON.check} 已取得 · ${formatDateTime(t.invoiceReceivedAt)}</span>`}
+          </div>
+        </article>`;
+    }).join('');
+  }
+
+  markInvoiceReceived(id) {
+    const task = this.tasks.find((t) => t.id === id && t.status === 'reimbursed' && t.hasInvoice);
+    if (!task || task.invoiceReceived) return;
+    task.invoiceReceived = true;
+    task.invoiceReceivedAt = new Date().toISOString();
+    task.updatedAt = new Date().toISOString();
+    this.persistTasks();
+    this.renderInvoiceBadge();
+    this.renderInvoice();
+    this.toast('已标记取得发票', `${task.applicant} · ¥${money(task.amount)} 已移入「已取得发票」。`, 'ok');
+  }
+
+  /* ---------------- 月度财务报表 ---------------- */
+
+  openStatement() {
+    this.statementOpen = true;
+    this.statementMonth = this.statementMonth || currentMonthValue();
+    this.el.statementMonthEl.value = this.statementMonth;
+    this.el.statement.classList.add('is-open');
+    this.el.statement.setAttribute('aria-hidden', 'false');
+    this.syncModalBodyClass();
+    this.renderStatement();
+  }
+
+  closeStatement(immediate = false) {
+    this.statementOpen = false;
+    this.el.statement.classList.remove('is-open');
+    this.el.statement.setAttribute('aria-hidden', 'true');
+    this.syncModalBodyClass();
+  }
+
+  statementTasks(month) {
+    const { start, end } = monthRange(month);
+    return this.tasks.filter((t) => {
+      const key = dateKeyOf(t.appliedAt);
+      return key >= start && key <= end && (t.status === 'reimbursed' || t.status === 'supplemented');
+    });
+  }
+
+  buildStatement(month) {
+    const { start, end, year, month: monthNumber, last } = monthRange(month);
+    const tasks = this.statementTasks(month);
+    const cells = new Map();
+    let recognized = 0;
+    for (const t of tasks) {
+      const { unit, costRow, amount } = mapCostToStatement(t);
+      const key = `${costRow}|${unit}`;
+      cells.set(key, (cells.get(key) || 0) + amount);
+      recognized += amount;
+    }
+    const rows = MONTHLY_COST_ROWS.map((label, i) => {
+      const unitAmounts = {};
+      let total = 0;
+      for (const u of BUSINESS_UNITS) {
+        const value = cells.get(`${label}|${u.key}`) || 0;
+        unitAmounts[u.key] = value;
+        total += value;
+      }
+      return { code: i + 2, label, unitAmounts, total };
+    });
+    const unitTotals = {};
+    for (const u of BUSINESS_UNITS) {
+      unitTotals[u.key] = rows.reduce((s, r) => s + (r.unitAmounts[u.key] || 0), 0);
+    }
+    const grand = rows.reduce((s, r) => s + r.total, 0);
+    return {
+      month, start, end, year, monthNumber, last,
+      label: `${year}.${pad(monthNumber)}`,
+      tasks, count: tasks.length, recognized, rows, unitTotals, grand,
+      generatedAt: localTimestamp(),
+    };
+  }
+
+  statementHtml(data) {
+    const unit = (v) => (v > 0 ? money(v) : '');
+    const unitHeads = BUSINESS_UNITS.map((u) => `<th>${u.label}</th>`).join('');
+    const rows = data.rows.map((r, i) => `
+      <tr>
+        <td class="is-code">${r.code}</td>
+        ${i === 0 ? `<td rowspan="${data.rows.length}" class="is-groupcell">运营支出</td>` : ''}
+        <td class="is-item">${r.label}</td>
+        ${BUSINESS_UNITS.map((u) => `<td class="is-money">${unit(r.unitAmounts[u.key])}</td>`).join('')}
+        <td class="is-money is-total">${unit(r.total)}</td>
+      </tr>`).join('');
+    return `
+      <div class="rb-fin-paper">
+        <div class="rb-fin-head">
+          <div class="rb-fin-meta">
+            <span>编制对象：GOOD WORK</span>
+            <span>编制人：财务部</span>
+            <span>统计口径：当月已报销成本（含已补充附件）</span>
+          </div>
+          <div class="rb-fin-title-wrap">
+            <h3>GOODWORK 车房现金流量表</h3>
+            <span>CASH FLOW STATEMENT · ${data.label}</span>
+          </div>
+          <div class="rb-fin-meta is-right">
+            <span>编制月份：${data.label}</span>
+            <span>账期：${data.start} 至 ${data.end}</span>
+            <span>文件编号：1000 Y008</span>
+          </div>
+        </div>
+        ${data.count === 0 ? '<div class="rb-fin-empty-note">本月暂无已报销成本，表格按标准模板展示；将待报销记录拖入「已报销」后即可自动填入。</div>' : ''}
+        <div class="rb-fin-table-wrap">
+          <table class="rb-fin-table">
+            <colgroup>
+              <col class="col-code" />
+              <col class="col-group" />
+              <col class="col-item" />
+              ${BUSINESS_UNITS.map(() => '<col class="col-unit" />').join('')}
+              <col class="col-total" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th class="is-code">行次</th>
+                <th colspan="2">项目</th>
+                ${unitHeads}
+                <th class="is-total">总额</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="is-group">
+                <td class="is-code">1</td>
+                <td colspan="2" class="is-center">实际收入</td>
+                ${BUSINESS_UNITS.map(() => '<td></td>').join('')}
+                <td class="is-total"></td>
+              </tr>
+              ${rows}
+              <tr class="is-subtotal">
+                <td class="is-code">32</td>
+                <td colspan="2" class="is-center">小计</td>
+                ${BUSINESS_UNITS.map((u) => `<td class="is-money">${money(data.unitTotals[u.key] || 0)}</td>`).join('')}
+                <td class="is-money is-total">${money(data.grand)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="rb-fin-foot">
+          <span>共 ${data.count} 笔已报销成本 · 已识别金额 ¥${money(data.recognized)}</span>
+          <span>生成于 ${data.generatedAt} · 成本分类自动映射</span>
+        </div>
+      </div>`;
+  }
+
+  renderStatement() {
+    const data = this.buildStatement(this.statementMonth);
+    this.el.statementMonthEl.value = this.statementMonth;
+    this.el.statementMeta.textContent = `${data.label} · 账期 ${data.start} 至 ${data.end} · ${data.count} 笔已报销成本 · ¥${money(data.grand)}`;
+    this.el.statementBody.innerHTML = this.statementHtml(data);
+    this._statementData = data;
+  }
+
+  buildStatementWorkbook(XLSX, data) {
+    const wb = XLSX.utils.book_new();
+    const blank = (n) => new Array(n).fill('');
+    const aoa = [];
+    aoa.push(['GOODWORK 车房现金流量表', ...blank(10)]);
+    aoa.push(['编制对象：GOOD WORK', '', '', '', '', '', '', '', `编制月份：${data.label}`, '', '']);
+    aoa.push(['编制人：财务部', '', '', '', '', '', '', '', `账期：${data.start} 至 ${data.end}`, '', '']);
+    aoa.push(['统计口径：当月已报销成本（含已补充附件）', '', '', '', '', '', '', '', '文件编号：1000 Y008', '', '']);
+    aoa.push(['行次', '项目', '', ...BUSINESS_UNITS.map((u) => u.label), '总额']);
+    aoa.push(['1', '实际收入', '', ...blank(8)]);
+    data.rows.forEach((r, i) => {
+      aoa.push([
+        r.code,
+        i === 0 ? '运营支出' : '',
+        r.label,
+        ...BUSINESS_UNITS.map((u) => (r.unitAmounts[u.key] > 0 ? r.unitAmounts[u.key] : '')),
+        r.total > 0 ? r.total : '',
+      ]);
+    });
+    aoa.push(['32', '小计', '', ...BUSINESS_UNITS.map((u) => data.unitTotals[u.key] || 0), data.grand]);
+    aoa.push(blank(11));
+    aoa.push(['说明：成本按报销分类自动映射至本表项目；待报销记录不计入本表。', ...blank(10)]);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 10 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 2 } },
+      { s: { r: 2, c: 0 }, e: { r: 2, c: 2 } },
+      { s: { r: 3, c: 0 }, e: { r: 3, c: 2 } },
+      { s: { r: 1, c: 8 }, e: { r: 1, c: 10 } },
+      { s: { r: 2, c: 8 }, e: { r: 2, c: 10 } },
+      { s: { r: 3, c: 8 }, e: { r: 3, c: 10 } },
+      { s: { r: 4, c: 1 }, e: { r: 4, c: 2 } },
+      { s: { r: 5, c: 1 }, e: { r: 5, c: 2 } },
+      { s: { r: 6, c: 1 }, e: { r: 6 + data.rows.length - 1, c: 1 } },
+      { s: { r: 6 + data.rows.length, c: 1 }, e: { r: 6 + data.rows.length, c: 2 } },
+      { s: { r: 6 + data.rows.length + 2, c: 0 }, e: { r: 6 + data.rows.length + 2, c: 10 } },
+    ];
+    ws['!cols'] = [
+      { wch: 6 }, { wch: 10 }, { wch: 27 },
+      ...BUSINESS_UNITS.map(() => ({ wch: 14 })),
+      { wch: 16 },
+    ];
+    ws['!rows'] = [
+      { hpt: 30 }, { hpt: 17 }, { hpt: 17 }, { hpt: 17 }, { hpt: 25 },
+      ...Array(data.rows.length + 2).fill({ hpt: 18 }),
+      { hpt: 10 }, { hpt: 24 },
+    ];
+
+    const border = {
+      top: { style: 'thin', color: { rgb: 'FF7F7F7F' } },
+      bottom: { style: 'thin', color: { rgb: 'FF7F7F7F' } },
+      left: { style: 'thin', color: { rgb: 'FF7F7F7F' } },
+      right: { style: 'thin', color: { rgb: 'FF7F7F7F' } },
+    };
+    const cellAt = (r, c) => {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+      return ws[addr];
+    };
+    for (let r = 4; r <= 6 + data.rows.length; r++) {
+      for (let c = 0; c <= 10; c++) {
+        const cell = cellAt(r, c);
+        cell.s = {
+          font: { name: '宋体', sz: 10, color: { rgb: 'FF1F1F1F' } },
+          alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+          border,
+        };
+        if (c >= 3) {
+          cell.s.alignment = { horizontal: 'right', vertical: 'center' };
+          cell.s.numFmt = '#,##0.00';
+        }
+      }
+    }
+    // 标题
+    cellAt(0, 0).s = {
+      font: { name: '宋体', sz: 16, bold: true, color: { rgb: 'FF111111' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    };
+    // 表头上底色
+    for (let c = 0; c <= 10; c++) {
+      const cell = cellAt(4, c);
+      cell.s.fill = { fgColor: { rgb: 'FFE7E6E6' } };
+      cell.s.font = { name: '宋体', sz: 10, bold: true };
+      cell.s.alignment = { horizontal: 'center', vertical: 'center', wrapText: true };
+    }
+    // 实际收入 / 小计 / 分组列
+    for (let c = 0; c <= 10; c++) {
+      cellAt(5, c).s.fill = { fgColor: { rgb: 'FFE7E6E6' } };
+      cellAt(6 + data.rows.length, c).s.fill = { fgColor: { rgb: 'FFE7E6E6' } };
+      cellAt(6 + data.rows.length, c).s.font = { name: '宋体', sz: 10, bold: true };
+    }
+    cellAt(6, 1).s.alignment = { horizontal: 'center', vertical: 'center', textRotation: 0 };
+    // 项目列左对齐
+    for (let r = 6; r < 6 + data.rows.length; r++) {
+      cellAt(r, 2).s.alignment = { horizontal: 'left', vertical: 'center', indent: 1 };
+    }
+    cellAt(6 + data.rows.length, 2).s.alignment = { horizontal: 'center', vertical: 'center' };
+    // 说明
+    cellAt(6 + data.rows.length + 2, 0).s = {
+      font: { name: '宋体', sz: 9, italic: true, color: { rgb: 'FF666666' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+    };
+
+    XLSX.utils.book_append_sheet(wb, ws, '月度现金流量表');
+    return wb;
+  }
+
+  async exportStatement() {
+    if (this.exporting) return;
+    const data = this._statementData || this.buildStatement(this.statementMonth);
+    this.exporting = true;
+    const btn = $('[data-rb="statement-export"]', this.root);
+    if (btn) btn.disabled = true;
+    try {
+      const XLSX = await this.loadXLSX();
+      const wb = this.buildStatementWorkbook(XLSX, data);
+      const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true });
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const fileName = `GOODWORK_月度现金流量表_${data.month}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      if (this.folderStatus === 'connected' && await this.ensureFolderPermission(false)) {
+        try {
+          const fh = await this.folderHandle.getFileHandle(fileName, { create: true });
+          const w = await fh.createWritable();
+          await w.write(blob);
+          await w.close();
+        } catch (err) {
+          console.warn('月度财务报表写入 D 盘失败', err);
+        }
+      }
+      this.toast('月度财务报表已导出', `${data.label} · ${data.count} 笔已报销成本 · 与图片表格同版式。`, 'ok');
+    } catch (err) {
+      console.error(err);
+      this.toast('导出失败', err?.message || '请稍后重试。');
+    } finally {
+      this.exporting = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  /* ---------------- 当日已处理待报销 ---------------- */
+
+  async exportProcessed() {
+    if (this.exporting) return;
+    const month = currentMonthValue();
+    const { start, end, last } = monthRange(month);
+    const events = this.processedEvents
+      .filter((e) => e.eventDate >= start && e.eventDate <= end)
+      .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+    if (!events.length) {
+      this.toast('本月还没有已处理记录', '当「待报销」被流转为「已报销」时，会自动累计到本报表。');
+      return;
+    }
+    this.exporting = true;
+    if (this.el.processedExport) this.el.processedExport.disabled = true;
+    try {
+      const XLSX = await this.loadXLSX();
+      const wb = XLSX.utils.book_new();
+      const today = toDateKey();
+      const dayLimit = month === currentMonthValue() ? Number(today.slice(8, 10)) : last;
+      const dailyMap = new Map();
+      for (const e of events) {
+        const item = dailyMap.get(e.eventDate) || { count: 0, amount: 0 };
+        item.count += 1;
+        item.amount += Number(e.amount) || 0;
+        dailyMap.set(e.eventDate, item);
+      }
+      const daily = [['日期', '处理笔数', '待报销处理金额']];
+      for (let d = 1; d <= dayLimit; d++) {
+        const key = `${month}-${pad(d)}`;
+        const item = dailyMap.get(key) || { count: 0, amount: 0 };
+        daily.push([key, item.count, item.amount]);
+      }
+      const totalCount = events.length;
+      const totalAmount = events.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      daily.push(['合计', totalCount, totalAmount]);
+      const wsDaily = XLSX.utils.aoa_to_sheet(daily);
+      wsDaily['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 20 }];
+      for (let r = 2; r <= daily.length; r++) {
+        const c = wsDaily[`C${r}`];
+        if (c) c.z = '#,##0.00';
+      }
+      XLSX.utils.book_append_sheet(wb, wsDaily, '每日汇总');
+
+      const detail = [['日期', '时间', '申请人', '部门', '报销分类', '报销金额', '是否有发票', '报销内容']];
+      for (const e of events) {
+        detail.push([
+          e.eventDate, localTimeFromIso(e.timestamp), e.applicant, e.department,
+          e.category, Number(e.amount) || 0, e.hasInvoice ? '是' : '否', e.content || '',
+        ]);
+      }
+      const wsDetail = XLSX.utils.aoa_to_sheet(detail);
+      wsDetail['!cols'] = [
+        { wch: 12 }, { wch: 9 }, { wch: 11 }, { wch: 12 }, { wch: 15 },
+        { wch: 14 }, { wch: 11 }, { wch: 40 },
+      ];
+      for (let r = 2; r <= detail.length; r++) {
+        const c = wsDetail[`F${r}`];
+        if (c) c.z = '#,##0.00';
+      }
+      XLSX.utils.book_append_sheet(wb, wsDetail, '处理明细');
+
+      const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true });
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const fileName = `GOODWORK_已处理报销日报_${month}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      if (this.folderStatus === 'connected' && await this.ensureFolderPermission(false)) {
+        try {
+          const fh = await this.folderHandle.getFileHandle(fileName, { create: true });
+          const w = await fh.createWritable();
+          await w.write(blob);
+          await w.close();
+        } catch (err) {
+          console.warn('已处理日报写入 D 盘失败', err);
+        }
+      }
+      this.toast('本月已处理日报已导出', `${month} · ${totalCount} 笔 · ¥${money(totalAmount)} · 每日汇总 + 明细时间。`, 'ok');
+    } catch (err) {
+      console.error(err);
+      this.toast('导出失败', err?.message || '请稍后重试。');
+    } finally {
+      this.exporting = false;
+      if (this.el.processedExport) this.el.processedExport.disabled = false;
+    }
   }
 
   /* ---------------- Excel ---------------- */

@@ -65,6 +65,119 @@ export function highValueText(task) {
   return `高额配件 · 跨月：${task.crossMonth ? '是' : '否'} · 备货成本：${task.stockingCost ? '是' : '否'}`;
 }
 
+/** 月度财务报表：图片中的业务单元列 */
+export const BUSINESS_UNITS = [
+  { key: 'maintenance', label: '维修、保养' },
+  { key: 'bodyPaint', label: '钣喷' },
+  { key: 'carWash', label: '洗车、美容' },
+  { key: 'film', label: '贴膜' },
+  { key: 'modification', label: '改装' },
+  { key: 'storeOps', label: '门店运维' },
+  { key: 'online', label: '线上运营' },
+];
+
+/** 月度财务报表：图片中的成本分类行（第 2—31 行） */
+export const MONTHLY_COST_ROWS = [
+  '财务费用',
+  '后台管理费',
+  '经营贷款利息',
+  '物管物业费',
+  '运费物流费',
+  '停车费',
+  '打车费',
+  '代驾费',
+  '配件',
+  '耗材',
+  '辅料',
+  '药剂',
+  '备货产品',
+  '上月开思采购款',
+  '本月开思采购款',
+  '审车备案款',
+  '工具',
+  '设备',
+  '装修费',
+  '救援拖车费',
+  '能源费（水电网气费）',
+  '外包',
+  '投放充值款',
+  '业务招待费',
+  '招聘费',
+  '加班跑腿费',
+  '福利费',
+  '客户退款',
+  '季度报税',
+  '赔款',
+];
+
+const UNIT_BY_DEPT = {
+  维保: 'maintenance',
+  钣喷: 'bodyPaint',
+  洗美: 'carWash',
+  贴膜: 'film',
+  改装: 'modification',
+  门店运维: 'storeOps',
+  投放充值款: 'online',
+};
+
+export function financialUnitFor(task) {
+  return UNIT_BY_DEPT[task.department] || 'storeOps';
+}
+
+const CATEGORY_ROW = {
+  配件: '配件',
+  耗材: '耗材',
+  辅料: '辅料',
+  药剂: '药剂',
+  备货产品: '备货产品',
+  工具: '工具',
+  设备: '设备',
+  外包: '外包',
+  供应商结算: '外包',
+  月租停车费: '停车费',
+  员工餐饮费: '福利费',
+  聚餐费: '福利费',
+  能源费: '能源费（水电网气费）',
+  物业费: '物管物业费',
+  小红书投放充值款: '投放充值款',
+  货运物流: '运费物流费',
+  打车费: '打车费',
+  停车费: '停车费',
+  代驾费: '代驾费',
+  财务费用: '财务费用',
+  开思采购款: '本月开思采购款',
+  上月开思采购款: '上月开思采购款',
+  客户退款: '客户退款',
+  其他: '后台管理费',
+};
+
+const DEPT_ROW = {
+  财务费用: '财务费用',
+  货运物流: '运费物流费',
+  打车费: '打车费',
+  停车费: '停车费',
+  代驾费: '代驾费',
+  开思采购款: '本月开思采购款',
+  上月开思采购款: '上月开思采购款',
+  客户退款: '客户退款',
+  投放充值款: '投放充值款',
+  福利费: '福利费',
+  其他: '后台管理费',
+};
+
+export function financialCostRowFor(task) {
+  return CATEGORY_ROW[task.category] || DEPT_ROW[task.department] || '后台管理费';
+}
+
+export function mapCostToStatement(task) {
+  return {
+    unit: financialUnitFor(task),
+    costRow: financialCostRowFor(task),
+    amount: Number(task.amount) || 0,
+  };
+}
+
+
 export function createSampleTasks() {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -86,6 +199,9 @@ export function createSampleTasks() {
       crossMonth: true,
       stockingCost: false,
       attachments: [],
+      collapsed: false,
+      invoiceReceived: false,
+      invoiceReceivedAt: null,
       order: 10,
       createdAt: stamp,
       updatedAt: stamp,
@@ -104,6 +220,9 @@ export function createSampleTasks() {
       crossMonth: null,
       stockingCost: null,
       attachments: [],
+      collapsed: false,
+      invoiceReceived: false,
+      invoiceReceivedAt: null,
       order: 20,
       createdAt: stamp,
       updatedAt: stamp,
@@ -122,6 +241,11 @@ export function createSampleTasks() {
       crossMonth: null,
       stockingCost: null,
       attachments: [],
+      collapsed: false,
+      invoiceReceived: false,
+      invoiceReceivedAt: null,
+      reimbursedAt: stamp,
+      reimbursedFrom: 'pending',
       order: 30,
       createdAt: stamp,
       updatedAt: stamp,
@@ -140,6 +264,9 @@ export function createSampleTasks() {
       crossMonth: null,
       stockingCost: null,
       attachments: [],
+      collapsed: false,
+      invoiceReceived: false,
+      invoiceReceivedAt: null,
       order: 40,
       createdAt: stamp,
       updatedAt: stamp,

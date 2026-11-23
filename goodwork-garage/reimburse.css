@@ -1026,7 +1026,7 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
 }
 .rb-report-head h2 { margin: 6px 0 0; font-family: var(--rb-serif); font-size: 25px; font-weight: 500; letter-spacing: 0.1em; color: #f1e8d7; }
 .rb-report-head p { margin: 6px 0 0; font-size: 8.5px; letter-spacing: 0.1em; color: var(--rb-muted); }
-.rb-report-head-actions { display: flex; align-items: center; gap: 8px; }
+.rb-report-head-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .rb-report-body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 28px 30px; scrollbar-width: thin; scrollbar-color: rgba(160, 190, 230, 0.18) transparent; }
 .rb-report-body::-webkit-scrollbar { width: 4px; }
 .rb-report-body::-webkit-scrollbar-thumb { background: rgba(160, 190, 230, 0.18); border-radius: 4px; }
@@ -1196,4 +1196,497 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
   .rb-export-card { padding: 10px 12px; gap: 6px; }
   .rb-bottom { padding: 9px 2px 11px; }
   .rb-total > b { font-size: 22px; }
+}
+
+/* =========================================================
+   已处理待报销 / 发票追踪 / 筛选 / 折叠 / 月度财务报表
+   ========================================================= */
+
+/* ---------------- 顶部：当日已处理待报销 ---------------- */
+
+.rb-processed {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(217, 255, 67, 0.16);
+  border-radius: 10px;
+  background:
+    radial-gradient(ellipse 55% 140% at 0% 50%, rgba(217, 255, 67, 0.09), transparent 62%),
+    rgba(8, 13, 22, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.rb-processed-main { display: flex; flex-direction: column; gap: 3px; min-width: 210px; flex: 0 0 auto; }
+.rb-processed-kicker { display: flex; align-items: center; gap: 7px; font-size: 6.5px; letter-spacing: 0.2em; color: var(--rb-muted-2); white-space: nowrap; }
+.rb-processed-kicker i { width: 16px; height: 1px; background: linear-gradient(90deg, var(--rb-neon), transparent); }
+.rb-processed-value { display: flex; align-items: baseline; gap: 9px; }
+.rb-processed-value b {
+  font-family: var(--rb-serif);
+  font-size: clamp(20px, 2vw, 28px);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--rb-neon);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 24px rgba(217, 255, 67, 0.18);
+  display: inline-block;
+}
+.rb-processed-value b.is-bump { animation: rbProcessedBump 0.55s var(--rb-ease); }
+@keyframes rbProcessedBump {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+.rb-processed-value span { font-size: 8px; letter-spacing: 0.05em; color: var(--rb-muted); }
+
+.rb-processed-list { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.rb-processed-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid rgba(160, 190, 230, 0.12);
+  border-radius: 100px;
+  background: rgba(160, 190, 230, 0.035);
+  font-size: 8px;
+  color: #bccadd;
+}
+.rb-processed-chip em { font-style: normal; font-size: 7.5px; color: var(--rb-muted-2); }
+.rb-processed-chip b { font-weight: 500; color: #e1e9f4; }
+.rb-processed-chip i { font-style: normal; color: var(--rb-neon); font-variant-numeric: tabular-nums; }
+.rb-processed-empty { font-size: 8px; letter-spacing: 0.04em; color: var(--rb-muted-2); }
+.rb-processed-export { flex: 0 0 auto; }
+
+.rb-invoice-btn {
+  position: relative;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid rgba(143, 187, 232, 0.32);
+  border-radius: 7px;
+  background: rgba(143, 187, 232, 0.07);
+  color: #b9d4ee;
+  font-family: var(--rb-sans);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.3s var(--rb-ease);
+  white-space: nowrap;
+}
+.rb-invoice-btn svg { width: 15px; height: 15px; }
+.rb-invoice-btn:hover { border-color: rgba(143, 187, 232, 0.62); background: rgba(143, 187, 232, 0.14); color: #e3f0ff; transform: translateY(-1px); }
+.rb-inv-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 100px;
+  background: var(--rb-neon);
+  color: #151a06;
+  font-size: 8px;
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+.rb-inv-badge.is-zero { background: rgba(160, 190, 230, 0.16); color: var(--rb-muted-2); }
+
+/* ---------------- 筛选查询 ---------------- */
+
+.rb-filterbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 9px 14px;
+  margin: 0 0 12px;
+  padding: 9px 14px;
+  border: 1px solid var(--rb-line);
+  border-radius: 10px;
+  background: rgba(9, 14, 23, 0.6);
+  transition: border-color 0.3s ease, background 0.3s ease;
+}
+.rb-filterbar.is-filtered { border-color: rgba(216, 180, 119, 0.28); background: rgba(216, 180, 119, 0.035); }
+.rb-filter-lead { display: flex; flex-direction: column; gap: 1px; padding-right: 12px; border-right: 1px solid var(--rb-line); flex: 0 0 auto; }
+.rb-filter-lead span { font-size: 6.5px; letter-spacing: 0.22em; color: var(--rb-gold); }
+.rb-filter-lead b { font-family: var(--rb-serif); font-size: 12px; font-weight: 500; letter-spacing: 0.08em; color: #ded4c1; white-space: nowrap; }
+.rb-filter-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.rb-filter-field > span { font-size: 6.5px; letter-spacing: 0.12em; color: var(--rb-muted-2); }
+.rb-filter-field select,
+.rb-filter-field input {
+  height: 29px;
+  border: 1px solid rgba(160, 190, 230, 0.14);
+  border-radius: 5px;
+  background: rgba(4, 8, 14, 0.65);
+  color: #dbe5f2;
+  font-family: var(--rb-sans);
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  padding: 0 8px;
+  outline: none;
+  color-scheme: dark;
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+.rb-filter-field select { min-width: 118px; }
+.rb-filter-field select:focus,
+.rb-filter-field input:focus { border-color: rgba(216, 180, 119, 0.5); background: rgba(8, 14, 24, 0.9); }
+.rb-filter-range { display: flex; align-items: center; gap: 6px; }
+.rb-filter-range input { width: 128px; }
+.rb-filter-range em { font-style: normal; font-size: 8px; color: var(--rb-muted-2); }
+.rb-filter-actions { display: flex; align-items: center; gap: 5px; }
+.rb-filter-chip {
+  height: 29px;
+  padding: 0 10px;
+  border: 1px solid rgba(160, 190, 230, 0.14);
+  border-radius: 100px;
+  background: rgba(160, 190, 230, 0.04);
+  color: var(--rb-muted);
+  font-family: var(--rb-sans);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.rb-filter-chip:hover { color: var(--rb-gold-2); border-color: rgba(216, 180, 119, 0.4); background: rgba(216, 180, 119, 0.08); }
+.rb-filter-result { margin-left: auto; font-size: 8px; letter-spacing: 0.04em; color: var(--rb-muted-2); white-space: nowrap; }
+.rb-filter-result b { color: var(--rb-gold-2); font-weight: 500; }
+
+/* ---------------- 卡片折叠 ---------------- */
+
+.rb-card-body {
+  max-height: 260px;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transition: max-height 0.42s var(--rb-ease), opacity 0.3s ease;
+}
+.rb-card-body-inner {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transform: translateY(0);
+  transition: transform 0.4s var(--rb-ease);
+}
+.rb-card.is-collapsed .rb-card-body { max-height: 0; opacity: 0; }
+.rb-card.is-collapsed .rb-card-body-inner { transform: translateY(-4px); }
+.rb-card-toggle svg { transition: transform 0.36s var(--rb-ease); }
+.rb-card.is-collapsed .rb-card-toggle svg { transform: rotate(-90deg); }
+.rb-card.is-collapsed { cursor: pointer; }
+
+/* ---------------- 发票追踪弹层 ---------------- */
+
+.rb-invoice-modal,
+.rb-statement-modal { z-index: 43; }
+
+.rb-invoice-sheet {
+  width: min(1120px, 94vw);
+  height: min(820px, 90vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(143, 187, 232, 0.28);
+  border-radius: 10px;
+  background:
+    radial-gradient(ellipse 80% 50% at 90% 0%, rgba(143, 187, 232, 0.07), transparent 60%),
+    linear-gradient(160deg, rgba(10, 16, 27, 0.99), rgba(5, 9, 16, 0.995));
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.7);
+  transform: translateY(14px) scale(0.99);
+  transition: transform 0.45s var(--rb-ease);
+  overflow: hidden;
+}
+.rb-modal.is-open .rb-invoice-sheet { transform: none; }
+.rb-invoice-sheet .rb-report-head { padding: 22px 28px 16px; }
+
+.rb-invoice-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 12px 28px 0;
+  border-bottom: 1px solid var(--rb-line);
+}
+.rb-invoice-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: var(--rb-muted);
+  font-family: var(--rb-sans);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+.rb-invoice-tab b {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 100px;
+  background: rgba(160, 190, 230, 0.12);
+  font-size: 7.5px;
+  font-weight: 500;
+  display: grid;
+  place-items: center;
+}
+.rb-invoice-tab:hover { color: var(--rb-gold-2); }
+.rb-invoice-tab.is-active { color: var(--rb-gold-2); border-color: var(--rb-line); background: rgba(216, 180, 119, 0.07); }
+.rb-invoice-tab.is-active b { background: var(--rb-gold); color: #1e1709; }
+
+.rb-invoice-filters {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 13px 28px;
+  border-bottom: 1px solid var(--rb-line);
+}
+
+.rb-invoice-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 28px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 190, 230, 0.18) transparent;
+}
+.rb-invoice-body::-webkit-scrollbar { width: 4px; }
+.rb-invoice-body::-webkit-scrollbar-thumb { background: rgba(160, 190, 230, 0.18); border-radius: 4px; }
+
+.rb-inv-row {
+  display: flex;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--rb-line);
+  border-radius: 9px;
+  background: rgba(160, 190, 230, 0.025);
+  transition: border-color 0.25s ease, background 0.25s ease;
+}
+.rb-inv-row:hover { border-color: rgba(216, 180, 119, 0.24); background: rgba(216, 180, 119, 0.03); }
+.rb-inv-main { flex: 1; min-width: 0; }
+.rb-inv-line { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.rb-inv-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(143, 187, 232, 0.12);
+  border: 1px solid rgba(143, 187, 232, 0.2);
+  color: #cfe3f7;
+  font-family: var(--rb-serif);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.rb-inv-line b { font-family: var(--rb-serif); font-size: 13px; font-weight: 500; letter-spacing: 0.05em; color: #eee5d5; }
+.rb-inv-line em { font-style: normal; font-size: 8px; color: var(--rb-muted-2); }
+.rb-inv-content { margin: 7px 0 0; font-size: 9px; line-height: 1.65; color: var(--rb-muted); }
+.rb-inv-vouchers { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.rb-inv-voucher {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 280px;
+  padding: 4px 8px;
+  border: 1px solid rgba(160, 190, 230, 0.14);
+  border-radius: 4px;
+  background: rgba(160, 190, 230, 0.04);
+  color: #b9c8da;
+  font-family: var(--rb-sans);
+  font-size: 8px;
+  cursor: pointer;
+  transition: all 0.22s ease;
+}
+.rb-inv-voucher svg { width: 11px; height: 11px; color: var(--rb-gold); flex: 0 0 auto; }
+.rb-inv-voucher span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-inv-voucher:hover { color: var(--rb-gold-2); border-color: rgba(216, 180, 119, 0.4); }
+.rb-inv-novoucher { font-size: 8px; color: var(--rb-muted-2); }
+.rb-inv-side { flex: 0 0 190px; display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: 10px; }
+.rb-inv-amount { font-family: var(--rb-serif); font-size: 20px; font-weight: 500; color: var(--rb-gold-2); font-variant-numeric: tabular-nums; }
+.rb-inv-side .rb-btn { min-height: 31px; font-size: 8px; }
+.rb-inv-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid rgba(159, 207, 174, 0.28);
+  border-radius: 100px;
+  background: rgba(159, 207, 174, 0.06);
+  color: var(--rb-green);
+  font-size: 8px;
+  white-space: nowrap;
+}
+.rb-inv-done svg { width: 11px; height: 11px; }
+.rb-invoice-empty { padding: 60px 20px; text-align: center; }
+.rb-invoice-empty span { font-size: 7px; letter-spacing: 0.24em; color: var(--rb-blue); }
+.rb-invoice-empty h3 { margin: 10px 0; font-family: var(--rb-serif); font-size: 20px; font-weight: 500; color: #e4d9c5; }
+.rb-invoice-empty p { margin: 0; font-size: 9px; line-height: 1.7; color: var(--rb-muted-2); }
+
+/* ---------------- 月度财务报表 ---------------- */
+
+.rb-statement-sheet {
+  width: min(1420px, 96vw);
+  height: min(900px, 92vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(216, 180, 119, 0.3);
+  border-radius: 10px;
+  background: linear-gradient(160deg, rgba(10, 16, 27, 0.99), rgba(5, 9, 16, 0.995));
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.72);
+  transform: translateY(14px) scale(0.99);
+  transition: transform 0.45s var(--rb-ease);
+  overflow: hidden;
+}
+.rb-modal.is-open .rb-statement-sheet { transform: none; }
+.rb-statement-sheet .rb-report-head { padding: 20px 26px 15px; }
+.rb-month-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--rb-line);
+  border-radius: 7px;
+  background: rgba(8, 13, 22, 0.55);
+}
+.rb-month-picker span { font-size: 7px; letter-spacing: 0.1em; color: var(--rb-muted-2); white-space: nowrap; }
+.rb-month-picker input {
+  border: 0;
+  background: transparent;
+  color: var(--rb-text);
+  font-family: var(--rb-sans);
+  font-size: 10px;
+  color-scheme: dark;
+  outline: none;
+}
+.rb-statement-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px 26px 28px;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% 0%, rgba(216, 180, 119, 0.04), transparent 70%),
+    #14171c;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 190, 230, 0.18) transparent;
+}
+.rb-statement-body::-webkit-scrollbar { width: 5px; height: 5px; }
+.rb-statement-body::-webkit-scrollbar-thumb { background: rgba(160, 190, 230, 0.18); border-radius: 4px; }
+
+.rb-fin-paper {
+  min-width: 1160px;
+  max-width: 1340px;
+  margin: 0 auto;
+  padding: 16px 20px 18px;
+  background: #fcfcfa;
+  color: #17181b;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+.rb-fin-head { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 16px; align-items: start; }
+.rb-fin-title-wrap { text-align: center; }
+.rb-fin-title-wrap h3 { margin: 1px 0 0; font-family: var(--rb-serif); font-size: 21px; font-weight: 600; letter-spacing: 0.1em; color: #121212; white-space: nowrap; }
+.rb-fin-title-wrap span { display: block; margin-top: 4px; font-size: 6.5px; letter-spacing: 0.22em; color: #838383; }
+.rb-fin-meta { display: flex; flex-direction: column; gap: 3px; padding-top: 2px; font-size: 7.5px; line-height: 1.5; color: #343434; }
+.rb-fin-meta.is-right { align-items: flex-end; text-align: right; }
+.rb-fin-empty-note { margin-top: 10px; padding: 6px 9px; border-left: 3px solid #c8a15c; background: #f6f0e4; font-size: 8px; line-height: 1.6; color: #6d5a39; }
+
+.rb-fin-table-wrap { margin-top: 11px; overflow-x: auto; }
+.rb-fin-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8.5px; }
+.rb-fin-table col.col-code { width: 42px; }
+.rb-fin-table col.col-group { width: 76px; }
+.rb-fin-table col.col-item { width: 186px; }
+.rb-fin-table col.col-unit { width: auto; }
+.rb-fin-table col.col-total { width: 96px; }
+.rb-fin-table th,
+.rb-fin-table td { height: 21px; padding: 2px 5px; border: 1px solid #8f8f8f; }
+.rb-fin-table th { background: #e7e6e6; font-size: 8px; font-weight: 700; text-align: center; color: #171717; }
+.rb-fin-table td { color: #1d1d1d; }
+.rb-fin-table .is-code { text-align: center; color: #3a3a3a; }
+.rb-fin-table .is-item { text-align: center; letter-spacing: 0.02em; }
+.rb-fin-table .is-center { text-align: center; }
+.rb-fin-table .is-money { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rb-fin-table .is-total { text-align: right; font-weight: 600; background: #f4f2ec; }
+.rb-fin-table th.is-total { text-align: center; background: #e7e6e6; }
+.rb-fin-table .is-groupcell {
+  text-align: center;
+  vertical-align: middle;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  background: #f7f6f2;
+}
+.rb-fin-table tr.is-group td { background: #e7e6e6; font-weight: 700; color: #141414; }
+.rb-fin-table tr.is-subtotal td { background: #e7e6e6; font-weight: 700; color: #111; }
+.rb-fin-table tr.is-subtotal td.is-total { background: #dcd9d0; }
+.rb-fin-foot { display: flex; justify-content: space-between; gap: 14px; margin-top: 9px; font-size: 7px; letter-spacing: 0.02em; color: #7a7a7a; }
+
+/* ---------------- 新增控件的响应式 ---------------- */
+
+@media (max-width: 1240px) {
+  .rb-processed-list { display: none; }
+  .rb-filter-result { margin-left: 0; }
+}
+
+@media (max-width: 1100px) {
+  .rb-processed { flex-wrap: wrap; }
+  .rb-processed-main { min-width: 180px; }
+  .rb-processed-list { display: flex; flex-basis: 100%; order: 3; }
+  .rb-filterbar { align-items: center; }
+  .rb-filter-result { margin-left: auto; }
+  .rb-invoice-sheet, .rb-statement-sheet { height: 92vh; }
+}
+
+@media (max-width: 700px) {
+  .rb-invoice-btn { width: 34px; justify-content: center; padding: 0; }
+  .rb-invoice-btn span { display: none; }
+  .rb-inv-badge { position: absolute; top: -5px; right: -5px; }
+  .rb-processed { gap: 8px; padding: 9px 11px; }
+  .rb-processed-main { min-width: 0; flex: 1; }
+  .rb-processed-value b { font-size: 21px; }
+  .rb-processed-value span { font-size: 7px; }
+  .rb-processed-list { display: none; }
+  .rb-processed-export { padding: 0 8px; font-size: 8px; }
+  .rb-filterbar { gap: 8px 10px; padding: 8px 11px; }
+  .rb-filter-lead { border-right: 0; padding-right: 0; width: 100%; flex-direction: row; align-items: baseline; gap: 8px; }
+  .rb-filter-field { flex: 1 1 calc(50% - 6px); }
+  .rb-filter-field select { min-width: 0; width: 100%; }
+  .rb-filter-date { flex-basis: 100%; }
+  .rb-filter-range { width: 100%; }
+  .rb-filter-range input { flex: 1; width: auto; min-width: 0; }
+  .rb-filter-actions { flex-basis: 100%; }
+  .rb-filter-chip { flex: 1; }
+  .rb-filter-result { width: 100%; }
+  .rb-invoice-sheet, .rb-statement-sheet { width: 100%; height: 100%; border-radius: 0; border: 0; }
+  .rb-invoice-sheet .rb-report-head, .rb-statement-sheet .rb-report-head { padding: 16px 16px 12px; }
+  .rb-invoice-tabs { padding: 10px 16px 0; }
+  .rb-invoice-filters { padding: 11px 16px; }
+  .rb-invoice-body { padding: 14px 16px 20px; }
+  .rb-inv-row { flex-direction: column; gap: 10px; }
+  .rb-inv-side { flex: 0 0 auto; flex-direction: row; align-items: center; justify-content: space-between; width: 100%; }
+  .rb-statement-body { padding: 14px 14px 20px; }
+  .rb-fin-paper { min-width: 1040px; padding: 12px 14px; }
+  .rb-fin-title-wrap h3 { font-size: 17px; }
+  .rb-fin-head { gap: 10px; }
+  .rb-fin-meta { font-size: 6.5px; }
+  .rb-fin-foot { flex-direction: column; gap: 3px; }
+}
+
+@media (max-height: 760px) and (min-width: 701px) {
+  .rb-processed { margin-top: 8px; padding: 6px 12px; }
+  .rb-processed-value b { font-size: 20px; }
+  .rb-processed-kicker { font-size: 6px; }
+  .rb-filterbar { padding: 6px 12px; margin-bottom: 8px; }
+  .rb-filter-field select, .rb-filter-field input, .rb-filter-chip { height: 26px; }
+  .rb-filter-field > span { font-size: 6px; }
 }
