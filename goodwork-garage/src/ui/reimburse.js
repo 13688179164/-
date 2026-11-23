@@ -7,7 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   createSampleTasks, BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261123v914';
-import { CloudSync } from '../core/cloudSync.js?v=20261123v919';
+import { CloudSync } from '../core/cloudSync.js?v=20261123v920';
 
 /* ------------------------------------------------------------------ */
 /* 基础工具                                                            */
@@ -2848,6 +2848,17 @@ export class ReimburseBoard {
           }
         }
       }
+      // 🔧 内容没有实际变化时跳过重渲染，避免轮询每 3 秒刷新一次导致界面闪烁
+      const sigOf = (tasks) => tasks.map((t) => [
+        t.id, t.status, t.amount, t.applicant, t.department, t.category, t.appliedAt,
+        t.order, t.updatedAt, t.hasInvoice, t.invoiceReceived, t.invoiceReceivedAt,
+        t.reimbursedAt, t.reimbursedFrom, t.content,
+        (t.attachments || []).map((a) => a.id + ':' + (a.written ? 1 : 0)).join('|'),
+      ].join('~')).join('\n');
+      const nextProc = Array.isArray(state.processedEvents) ? state.processedEvents : [];
+      const sameTasks = sigOf(incoming) === sigOf(this.tasks || []);
+      const sameProc = JSON.stringify(nextProc) === JSON.stringify(this.processedEvents || []);
+      if (sameTasks && sameProc) return;
       this.tasks = incoming;
       this.processedEvents = Array.isArray(state.processedEvents) ? state.processedEvents : [];
       try {

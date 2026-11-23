@@ -138,6 +138,18 @@ function nowIso() {
  * local 和 remote 都是本地格式（前端用的格式，有 tasks[i].updatedAt）。
  * 没有 id 的条目跳过。
  */
+/**
+ * 🔧 把各种时间格式统一成毫秒数再比较。
+ * 云端返回 "2026-11-23T23:24:31.123+00:00"、本地是 "2026-11-23T23:24:31.123Z"，
+ * 直接字符串比较会把「同一时刻」判成不同、甚至让旧数据覆盖新数据（状态变回待报销）。
+ */
+function tsMs(v) {
+  if (!v) return 0;
+  if (typeof v === 'number') return v;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : 0;
+}
+
 function mergeByUpdatedAt(local, remote) {
   const byId = new Map();
   const addOne = (item) => {
@@ -146,10 +158,10 @@ function mergeByUpdatedAt(local, remote) {
     if (!existing) {
       byId.set(item.id, item);
     } else {
-      // 取 updatedAt 更新的那条
-      const eTime = existing.updatedAt || existing.updated_at || '';
-      const iTime = item.updatedAt || item.updated_at || '';
-      if (iTime >= eTime) {
+      const eTime = tsMs(existing.updatedAt || existing.updated_at || existing.timestamp);
+      const iTime = tsMs(item.updatedAt || item.updated_at || item.timestamp);
+      // 只有严格更新才覆盖；同一时刻保留已存在的（本地优先），避免状态被旧数据回滚
+      if (iTime > eTime) {
         byId.set(item.id, item);
       }
     }
@@ -157,9 +169,7 @@ function mergeByUpdatedAt(local, remote) {
   for (const x of local || []) addOne(x);
   for (const x of remote || []) addOne(x);
   return [...byId.values()].sort((a, b) => {
-    const ta = a.updatedAt || a.updated_at || '';
-    const tb = b.updatedAt || b.updated_at || '';
-    return tb.localeCompare(ta);
+    return tsMs(b.updatedAt || b.updated_at) - tsMs(a.updatedAt || a.updated_at);
   });
 }
 
@@ -359,6 +369,8 @@ export class CloudSync {
       this.emit('disabled');
       return;
     }
+    // 🔧 只初始化一次：页面里可能同时存在全局单例和 ReimburseBoard 的两次 init 调用
+    if (this._initPromise) return this._initPromise;
     // 🔧 保存 init Promise，让 schedulePush 能等
     this._initPromise = (async () => {
       try {
@@ -1013,7 +1025,7 @@ export class CloudSync {
       const hasNewRemoteTask = remoteAllTasks.some((rt) => {
         const lt = localById.get(rt.id);
         if (!lt) return true;
-        return (rt.updatedAt || '') > (lt.updatedAt || '');
+        return tsMs(rt.updatedAt) > tsMs(lt.updatedAt);
       });
       const localProcIds = new Set(
         (local.processedEvents || []).map((e) => `${e.taskId}|${e.eventDate}|${e.createdAt || ''}`)
