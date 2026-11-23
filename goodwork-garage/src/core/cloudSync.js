@@ -84,7 +84,11 @@ async function pgRequest(method, envId, table, opts = {}) {
 
   const fetchOpts = { method, headers };
   if (opts.body != null) {
-    fetchOpts.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+    let body = opts.body;
+    // 终极防线：确保 POST/PATCH body 里没有 undefined 字段
+    if (Array.isArray(body)) body = sanitizeRows(body);
+    else if (body && typeof body === 'object') body = sanitizeRow(body);
+    fetchOpts.body = typeof body === 'string' ? body : JSON.stringify(body);
   }
 
   const fullUrl = url.toString();
@@ -139,6 +143,26 @@ async function pgRequest(method, envId, table, opts = {}) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+/**
+ * 把对象里所有 undefined 值替换成 null。
+ * 原因：PostgREST POST 数组要求所有元素的顶层 key 完全一致，
+ *       JSON.stringify 会把 undefined 字段完全去掉，导致 key 集合不匹配，
+ *       触发 PGRST102 "All object keys must match" 错误。
+ */
+function sanitizeRow(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k] = v === undefined ? null : v;
+  }
+  return out;
+}
+
+function sanitizeRows(arr) {
+  if (!Array.isArray(arr)) return arr;
+  return arr.map(sanitizeRow);
 }
 
 function readJson(key, fallback) {
@@ -363,20 +387,20 @@ export class CloudSync {
   }
 
   taskToRow(task, updatedAt) {
-    return {
-      id: task.id,
-      applicant: task.applicant || '',
-      amount: task.amount || 0,
-      department: task.department || '',
-      category: task.category || '',
-      applied_at: task.appliedAt,
-      content: task.content || '',
-      status: task.status || 'pending',
+    const row = {
+      id: task.id ?? '',
+      applicant: task.applicant ?? '',
+      amount: task.amount ?? 0,
+      department: task.department ?? '',
+      category: task.category ?? '',
+      applied_at: task.appliedAt ?? null,
+      content: task.content ?? '',
+      status: task.status ?? 'pending',
       has_invoice: !!task.hasInvoice,
       invoice_received: !!task.invoiceReceived,
-      invoice_received_at: task.invoiceReceivedAt || null,
-      reimbursed_at: task.reimbursedAt || null,
-      reimbursed_from: task.reimbursedFrom || null,
+      invoice_received_at: task.invoiceReceivedAt ?? null,
+      reimbursed_at: task.reimbursedAt ?? null,
+      reimbursed_from: task.reimbursedFrom ?? null,
       high_value_part: task.highValuePart ?? null,
       cross_month: task.crossMonth ?? null,
       stocking_cost: task.stockingCost ?? null,
@@ -385,9 +409,12 @@ export class CloudSync {
         .filter((a) => a.cloudFileId)
         .map((a) => ({ id: a.id, cloudFileId: a.cloudFileId })),
       writer_device_id: this.deviceId,
-      created_at: task.createdAt || updatedAt,
+      created_at: task.createdAt ?? updatedAt,
       updated_at: updatedAt,
     };
+    // 保险起见：把所有 undefined 替换成 null，
+    // 避免 PostgREST PGRST102 "All object keys must match" 错误
+    return sanitizeRow(row);
   }
 
   async connectData(mode = 'auto') {
@@ -553,15 +580,15 @@ export class CloudSync {
       const attachRows = [];
       for (const t of state.tasks || []) {
         for (const a of t.attachments || []) {
-          attachRows.push({
-            id: a.id,
-            task_id: t.id,
-            name: a.name || '',
-            size: a.size || 0,
-            mime_type: a.type || '',
-            cloud_file_id: a.cloudFileId || '',
+          attachRows.push(sanitizeRow({
+            id: a.id ?? '',
+            task_id: t.id ?? '',
+            name: a.name ?? '',
+            size: a.size ?? 0,
+            mime_type: a.type ?? '',
+            cloud_file_id: a.cloudFileId ?? '',
             blob_hash: '',
-          });
+          }));
         }
       }
       if (attachRows.length > 0) {
@@ -575,15 +602,15 @@ export class CloudSync {
       }
 
       // --- 3. upsert 所有 processed events ---
-      const procRows = (state.processedEvents || []).map((e) => ({
-        task_id: e.taskId,
-        event_date: e.eventDate,
-        amount: e.amount || 0,
-        applicant: e.applicant || '',
-        category: e.category || '',
-        writer_device_id: e.writerDeviceId || this.deviceId,
-        created_at: e.createdAt || now,
-      }));
+      const procRows = sanitizeRows((state.processedEvents || []).map((e) => ({
+        task_id: e.taskId ?? '',
+        event_date: e.eventDate ?? null,
+        amount: e.amount ?? 0,
+        applicant: e.applicant ?? '',
+        category: e.category ?? '',
+        writer_device_id: e.writerDeviceId ?? this.deviceId,
+        created_at: e.createdAt ?? now,
+      })));
       if (procRows.length > 0) {
         await withTimeout(
           pgRequest('POST', this.envId, 'goodwork_processed', {
