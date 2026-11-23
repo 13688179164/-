@@ -299,8 +299,16 @@ export class ReimburseBoard {
       onStatus: (status, detail) => this.onCloudStatus(status, detail),
       onToast: (title, desc, type) => this.toast(title, desc, type),
     });
-    this.onCloudStatus(this.cloud.status, this.cloud.getStatus());
-    this.cloud.init();
+    this.cloud.onStatus(this.cloud.status, this.cloud.getStatus());
+    // 🔧 init() 返回 Promise，等它完成后打印状态
+    this.cloud.init().then(() => {
+      const s = this.cloud.getStatus();
+      console.log('%c[reimburse] cloud.init() 完成', 'color:#0a6', `connected=${s.connected} autoSync=${s.autoSync}`);
+      if (s.error) console.warn('[reimburse] init error detail:', s.error);
+    }).catch(e => {
+      console.error('[reimburse] cloud.init() 抛异常:', e);
+      console.log('[reimburse] 当前状态:', this.cloud.getStatus());
+    });
   }
 
   /* ---------------- 存储 ---------------- */
@@ -450,7 +458,12 @@ export class ReimburseBoard {
   persistTasks() {
     try {
       localStorage.setItem(TASKS_KEY, JSON.stringify(this.tasks));
-      if (!this.applyingCloud) this.cloud?.markLocalChange();
+      if (!this.applyingCloud) {
+        console.log('[reimburse] persistTasks → markLocalChange (connected=' + this.cloud?.isConnected() + ')');
+        this.cloud?.markLocalChange();
+      } else {
+        console.log('[reimburse] persistTasks → 跳过 markLocalChange (applyingCloud=true)');
+      }
       return true;
     } catch (err) {
       console.warn('保存报销数据失败', err);

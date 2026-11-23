@@ -1,20 +1,8 @@
 /**
  * 腾讯云开发 PostgreSQL 同步 —— 纯 fetch 版本（零 SDK 依赖）
- *
- * 原理：CloudBase PostgREST 网关接受 Publishable Key 作为 Bearer token，
- *       直接用 fetch 调 REST API，完全绕过 JS SDK 的 auth 网关路由问题。
- *
- * PostgREST 端点: https://{env}.api.tcloudbasegateway.com/v1/rdb/rest
- *
- * 表结构（四张表）：
- *   goodwork_tasks       报销记录主表
- *   goodwork_attachments 附件元数据表
- *   goodwork_processed   已报销事件表（去重追踪）
- *   goodwork_meta        工作区元数据（版本号等）
- *
- * 实时同步：定时轮询 (3s) + updated_at 增量拉取。
- * 冲突解决：最近写入优先 (updated_at DESC)。
+ * CloudSync v9.1
  */
+const CLOUD_SYNC_VERSION = 'v9.1-pure-fetch';
 const SETTINGS_KEY = 'goodwork.cloud.settings.v1';
 const DEVICE_KEY = 'goodwork.cloud.device.v1';
 const DEFAULT_ENV_ID = 'attractive-starfish-d0bp2e865971';
@@ -257,6 +245,32 @@ export class CloudSync {
     this.lastPollAt = null;
     this.lastRemoteUpdatedAt = '';
     this.errorDetail = '';
+
+    // 🛠️ 调试：挂到 window 上，方便 Console 手动测
+    if (typeof window !== 'undefined') {
+      window.__cloudSync = this;
+      window.__pgDebug = {
+        async testPostgrest() {
+          const headers = {
+            'Authorization': `Bearer ${PUBLISHABLE_KEY}`,
+            'Content-Type': 'application/json',
+          };
+          try {
+            const r = await fetch(`${pgBaseUrl(this.settings?.envId || DEFAULT_ENV_ID)}/goodwork_tasks?select=*&limit=1`, { headers });
+            console.log('[pgDebug] GET goodwork_tasks → HTTP', r.status, r.status >= 200 && r.status < 300 ? '✅' : '❌');
+            let body; try { body = await r.json(); } catch { body = await r.text(); }
+            console.log('[pgDebug] body:', JSON.stringify(body).slice(0, 300));
+            return { status: r.status, body };
+          } catch (e) {
+            console.error('[pgDebug] FATAL:', e);
+            return { error: String(e) };
+          }
+        },
+      };
+      console.log(`%c[CloudSync ${CLOUD_SYNC_VERSION}]`, 'background:#0052cc;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;',
+        `env=${this.settings.envId} device=${this.deviceId.slice(0,8)} autoSync=${this.autoSync}`);
+      console.log('[CloudSync] 调试接口: window.__cloudSync (实例) / window.__pgDebug.testPostgrest()');
+    }
   }
 
   get envId() { return this.settings.envId || ''; }
