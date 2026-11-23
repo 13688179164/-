@@ -599,7 +599,7 @@ export class CloudSync {
       category: r.category || '',
       writerDeviceId: r.writer_device_id || '',
       createdAt: r.created_at,
-    }));
+    })).filter((e) => !this.deletedIds.has(e.taskId));
 
     const local = this.getState();
     // 🔧 墓碑过滤：本地已被删除的任务不再参与合并/推送
@@ -620,7 +620,7 @@ export class CloudSync {
     // 规则：按 id 合并；同 id 取 updatedAt 更新的那条；本地独有（云端没有）的保留
     // 这样 pushNow 失败也不会让用户的数据被云端旧数据覆盖
 
-    const localProc = local.processedEvents || [];
+    const localProc = (local.processedEvents || []).filter((e) => !this.deletedIds.has(e.taskId));
 
     if (!localHasData && remoteTasks.length > 0) {
       // 本地完全空 → 直接用云端
@@ -770,8 +770,10 @@ export class CloudSync {
     try {
       const st = this.getState();
       const tasks = (st.tasks || []).filter((t) => t.id !== id);
+      // 🔧 删除该笔时，同时移除它在「当日已处理待报销」中的记录，金额栏不再计入
+      const processedEvents = (st.processedEvents || []).filter((e) => e.taskId !== id);
       this.applying = true;
-      try { this.applyState({ tasks, processedEvents: st.processedEvents || [] }, { source: 'cloud', silent: true }); }
+      try { this.applyState({ tasks, processedEvents }, { source: 'cloud', silent: true }); }
       finally { this.applying = false; }
     } catch { /* noop */ }
     if (!this.connected) return;
@@ -781,6 +783,9 @@ export class CloudSync {
     try {
       await pgRequest('DELETE', this.envId, 'goodwork_attachments', { filter: { task_id: `eq.${id}` } });
     } catch { /* 附件表可能为空 */ }
+    try {
+      await pgRequest('DELETE', this.envId, 'goodwork_processed', { filter: { task_id: `eq.${id}` } });
+    } catch (e) { console.warn('[cloudSync] 删除云端已处理记录失败:', e?.message); }
     await this.pushTombstones();
   }
 
@@ -887,8 +892,10 @@ export class CloudSync {
         ).catch((e) => console.warn('[cloudSync] attachments upsert 失败（不阻塞任务）:', e.message));
       }
 
-      // --- 3. upsert 所有 processed events ---
-      const procRows = sanitizeRows((state.processedEvents || []).map((e) => ({
+      // --- 3. upsert 所有 processed events（墓碑任务的历史记录不再上传）---
+      const procRows = sanitizeRows((state.processedEvents || [])
+        .filter((e) => !this.deletedIds.has(e.taskId))
+        .map((e) => ({
         task_id: e.taskId ?? '',
         event_date: e.eventDate ?? null,
         amount: e.amount ?? 0,
@@ -1064,10 +1071,14 @@ export class CloudSync {
         category: r.category || '',
         writerDeviceId: r.writer_device_id || '',
         createdAt: r.created_at,
-      }));
+      })).filter((e) => !this.deletedIds.has(e.taskId));
 
       const mergedTasks = mergeByUpdatedAt(localTasks, remoteIncrementalTasks);
-      const mergedProc = mergeByUpdatedAt(local.processedEvents || [], remoteIncrementalProc);
+      // 🔧 墓碑过滤：被删除的报销，其「已处理」记录也不再参与合并
+      const mergedProc = mergeByUpdatedAt(
+        (local.processedEvents || []).filter((e) => !this.deletedIds.has(e.taskId)),
+        remoteIncrementalProc
+      );
 
       console.log('[cloudSync] poll merge:',
         `remoteIncTasks=${remoteIncrementalTasks.length} → merged=${mergedTasks.length}`);

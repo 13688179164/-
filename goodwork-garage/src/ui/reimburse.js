@@ -7,7 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   createSampleTasks, BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261123v914';
-import { CloudSync } from '../core/cloudSync.js?v=20261123v920';
+import { CloudSync } from '../core/cloudSync.js?v=20261123v921';
 
 /* ------------------------------------------------------------------ */
 /* 基础工具                                                            */
@@ -1369,8 +1369,10 @@ export class ReimburseBoard {
 
   renderProcessed() {
     const today = toDateKey();
+    const aliveIds = new Set(this.tasks.map((t) => t.id));
     const events = this.processedEvents
-      .filter((e) => e.eventDate === today)
+      // 🔧 报销已被删除的，不再计入当日已处理金额
+      .filter((e) => e.eventDate === today && aliveIds.has(e.taskId))
       .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
     const total = events.reduce((s, e) => s + (Number(e.amount) || 0), 0);
     this.el.processedAmount.textContent = `¥${money(total)}`;
@@ -2094,7 +2096,11 @@ export class ReimburseBoard {
       for (const a of task.attachments) await deleteAttachmentBlob(a.id);
       this.tasks = this.tasks.filter((t) => t.id !== id);
       this.persistTasks();
-      // 🔧 同步删除到云端（含墓碑），防止被其他设备或轮询重新拉回来
+      // 🔧 同步移除该笔在「当日已处理待报销」中的记录，金额栏不再计入
+      const beforeProc = this.processedEvents.length;
+      this.processedEvents = this.processedEvents.filter((e) => e.taskId !== id);
+      if (this.processedEvents.length !== beforeProc) this.persistProcessed();
+      // 🔧 同步删除到云端（含墓碑与已处理记录），防止被其他设备或轮询重新拉回来
       try { await this.cloud?.recordDeletion(id); }
       catch (e) { console.warn('[reimburse] 云端删除失败:', e?.message); }
     }
