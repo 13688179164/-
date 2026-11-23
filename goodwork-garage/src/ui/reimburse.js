@@ -301,8 +301,8 @@ export class ReimburseBoard {
       onStatus: (status, detail) => this.onCloudStatus(status, detail),
       onToast: (title, desc, type) => this.toast(title, desc, type),
     });
-    // 不管是不是复用的全局实例，都更新回调绑定到当前 ReimburseBoard
-    this.cloud.getState = () => this.getCloudState();
+    // 🔧 不再覆盖 getState —— 让 CloudSync 自己从 localStorage 读（更可靠，不依赖 ReimburseBoard 是否初始化完成）
+    // this.cloud.getState = () => this.getCloudState();
     this.cloud.applyState = (state, meta) => this.applyCloudState(state, meta);
     this.cloud.onStatus = (status, detail) => this.onCloudStatus(status, detail);
     this.cloud.onToast = (title, desc, type) => this.toast(title, desc, type);

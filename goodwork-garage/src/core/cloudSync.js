@@ -216,9 +216,24 @@ export class CloudSync {
     onStatus,
     onToast,
   }) {
-    this.getState = getState;
-    this.applyState = applyState;
-    this.getAttachmentBlob = getAttachmentBlob;
+    // 🔧 getState 永远从 localStorage 读真实数据，忽略传入回调的 buggy 版本
+    // localStorage key 由 reimburse.js 定义：goodwork.reimburse.tasks.v3 / processed.v1
+    this.getState = () => {
+      const LS_TASKS = 'goodwork.reimburse.tasks.v3';
+      const LS_PROCESSED = 'goodwork.reimburse.processed.v1';
+      let tasks = [], processedEvents = [];
+      try {
+        const rawT = localStorage.getItem(LS_TASKS);
+        if (rawT) tasks = JSON.parse(rawT);
+      } catch (e) { /* noop */ }
+      try {
+        const rawP = localStorage.getItem(LS_PROCESSED);
+        if (rawP) processedEvents = JSON.parse(rawP);
+      } catch (e) {}
+      return { tasks: Array.isArray(tasks) ? tasks : [], processedEvents: Array.isArray(processedEvents) ? processedEvents : [] };
+    };
+    this.applyState = applyState || (() => {});
+    this.getAttachmentBlob = getAttachmentBlob || (async () => null);
     this.onAttachmentsUploaded = onAttachmentsUploaded || (() => {});
     this.onStatus = onStatus || (() => {});
     this.onToast = onToast || (() => {});
