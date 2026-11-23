@@ -146,6 +146,36 @@ function nowIso() {
 }
 
 /**
+ * 把两组相同类型的任务/事件按 id 合并，同 id 取 updatedAt 更新的那条。
+ * local 和 remote 都是本地格式（前端用的格式，有 tasks[i].updatedAt）。
+ * 没有 id 的条目跳过。
+ */
+function mergeByUpdatedAt(local, remote) {
+  const byId = new Map();
+  const addOne = (item) => {
+    if (!item || !item.id) return;
+    const existing = byId.get(item.id);
+    if (!existing) {
+      byId.set(item.id, item);
+    } else {
+      // 取 updatedAt 更新的那条
+      const eTime = existing.updatedAt || existing.updated_at || '';
+      const iTime = item.updatedAt || item.updated_at || '';
+      if (iTime >= eTime) {
+        byId.set(item.id, item);
+      }
+    }
+  };
+  for (const x of local || []) addOne(x);
+  for (const x of remote || []) addOne(x);
+  return [...byId.values()].sort((a, b) => {
+    const ta = a.updatedAt || a.updated_at || '';
+    const tb = b.updatedAt || b.updated_at || '';
+    return tb.localeCompare(ta);
+  });
+}
+
+/**
  * 把对象里所有 undefined 值替换成 null。
  * 原因：PostgREST POST 数组要求所有元素的顶层 key 完全一致，
  *       JSON.stringify 会把 undefined 字段完全去掉，导致 key 集合不匹配，
@@ -503,15 +533,58 @@ export class CloudSync {
       await this.pushNow({ force: true, silent: true });
       return;
     }
-    if (mode === 'pull' || (remoteTasks.length > 0)) {
+    if (mode === 'pull') {
+      // 用户主动拉取 → 用云端完全覆盖本地（符合用户预期）
       this.applyRemote(remoteTasks, remoteProcessed, { force: true, silent: true });
       return;
     }
-    if (localHasData) {
-      this.dirty = true;
-      this.localChangedAt = nowIso();
-      await this.pushNow({ force: true, silent: true });
+
+    // ===== auto 模式：智能合并，绝不丢失本地数据 =====
+    // 规则：按 id 合并；同 id 取 updatedAt 更新的那条；本地独有（云端没有）的保留
+    // 这样 pushNow 失败也不会让用户的数据被云端旧数据覆盖
+
+    const localTasks = local.tasks || [];
+    const localProc = local.processedEvents || [];
+
+    if (!localHasData && remoteTasks.length > 0) {
+      // 本地完全空 → 直接用云端
+      this.applyRemote(remoteTasks, remoteProcessed, { force: true, silent: true });
+      return;
     }
+
+    if (localHasData && remoteTasks.length === 0) {
+      // 云端空 → 推送本地
+      this.dirty = true;
+      await this.pushNow({ force: true, silent: true });
+      return;
+    }
+
+    // 两边都有数据 → 按 id 合并，取 updatedAt 较新的
+    const mergedTasks = mergeByUpdatedAt(localTasks, remoteTasks);
+    const mergedProc = mergeByUpdatedAt(localProc, remoteProcessed);
+
+    console.log('[cloudSync] auto merge:',
+      `localTasks=${localTasks.length} + remoteTasks=${remoteTasks.length} → merged=${mergedTasks.length}`,
+      `| localProc=${localProc.length} + remoteProc=${remoteProcessed.length} → merged=${mergedProc.length}`);
+
+    // 用合并结果覆盖本地状态
+    this.applying = true;
+    try {
+      this.applyState(
+        { tasks: mergedTasks, processedEvents: mergedProc },
+        { source: 'cloud', silent: true }
+      );
+    } finally {
+      this.applying = false;
+    }
+    this.dirty = true;  // 合并后可能有本地独有数据需要上云
+    this.localChangedAt = nowIso();
+    this.lastPollAt = Date.now();
+    this.lastRemoteUpdatedAt = mergedTasks.reduce((m, t) => (t.updatedAt > m ? t.updatedAt : m), '');
+    this.settings.lastSyncAt = this.localChangedAt;
+    this.saveSettings();
+    // 立刻推送合并后的结果到云端
+    await this.pushNow({ force: true, silent: true });
   }
 
   applyRemote(tasks, processed, { force = false, silent = false } = {}) {
@@ -687,7 +760,6 @@ export class CloudSync {
     if (!this.connected || this.applying || this.syncing) return;
     try {
       const since = this.lastRemoteUpdatedAt || '1970-01-01T00:00:00.000Z';
-      // PostgREST 用 field=gt.value 语法
       const rows = await pgRequest('GET', this.envId, 'goodwork_tasks', {
         select: '*',
         filter: { 'updated_at': `gt.${since}` },
@@ -700,15 +772,64 @@ export class CloudSync {
         filter: { 'created_at': `gt.${since}` },
       });
 
-      if ((rows?.length || 0) + (pRows?.length || 0) === 0) {
+      const hasNewRemote = (rows?.length || 0) + (pRows?.length || 0) > 0;
+
+      // 如果云端没有新数据，只是本地 dirty 了（用户在别的设备改了），触发 push
+      if (!hasNewRemote) {
+        // 检查有没有本地还没推上去的新数据
+        if (this.dirty) {
+          await this.pushNow({ silent: true });
+        }
         this.lastPollAt = Date.now();
         return;
       }
 
-      await this.connectData('pull');
+      // 有新的云端数据 → 只合并这些增量，不要拉全量覆盖本地！
+      const remoteIncrementalTasks = rows.map((r) => this.rowToTask(r));
+      const remoteIncrementalProc = pRows.map((r) => ({
+        taskId: r.task_id,
+        eventDate: r.event_date,
+        amount: Number(r.amount) || 0,
+        applicant: r.applicant || '',
+        category: r.category || '',
+        writerDeviceId: r.writer_device_id || '',
+        createdAt: r.created_at,
+      }));
+
+      const local = this.getState();
+      const mergedTasks = mergeByUpdatedAt(local.tasks || [], remoteIncrementalTasks);
+      const mergedProc = mergeByUpdatedAt(local.processedEvents || [], remoteIncrementalProc);
+
+      console.log('[cloudSync] poll merge:',
+        `remoteIncTasks=${remoteIncrementalTasks.length} → merged=${mergedTasks.length}`);
+
+      this.applying = true;
+      try {
+        this.applyState(
+          { tasks: mergedTasks, processedEvents: mergedProc },
+          { source: 'cloud', silent: true }
+        );
+      } finally {
+        this.applying = false;
+      }
+
+      // 更新 lastRemoteUpdatedAt 用合并后最新的那条
+      const allUpdated = [
+        ...(local.tasks || []).map(t => t.updatedAt || ''),
+        ...remoteIncrementalTasks.map(t => t.updatedAt || ''),
+      ].filter(Boolean);
+      this.lastRemoteUpdatedAt = allUpdated.length ? allUpdated.reduce((a, b) => a > b ? a : b) : since;
+      this.lastPollAt = Date.now();
+      this.settings.lastSyncAt = nowIso();
+      this.saveSettings();
+
+      // 增量处理完后，如果还有本地独有数据 dirty，继续推送
+      if (this.dirty) {
+        await this.pushNow({ silent: true });
+      }
     } catch (err) {
       if (Date.now() - (this.lastPollAt || 0) > 30000) {
-        this.emit('error', { message: '轮询云端超时：' + this.friendlyError(err) });
+        this.emit('error', { message: '轮询云端超时：' + this.friendlyError(err), err });
       }
     }
   }
