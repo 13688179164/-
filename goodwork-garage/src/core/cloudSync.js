@@ -1,6 +1,13 @@
 /**
- * 腾讯云开发 CloudBase 同步
- * 团队共享工作区：所有设备使用同一个工作区账号登录，共享台账与附件。
+ * 腾讯云开发 CloudBase 同步 · 匿名直连版
+ * 团队共享一个工作区：所有设备使用 CloudBase 匿名登录，
+ * 共享同一个 goodwork_workspaces.team 文档，多设备实时同步台账与附件。
+ *
+ * CloudBase 控制台需要：
+ *   1. 开启「匿名登录」
+ *   2. 创建数据库集合 goodwork_workspaces，权限设为「所有用户可读，仅创建者可写」
+ *      或自定义安全规则允许匿名用户读写 _id === 'team' 的文档
+ *   3. 安全域名添加本站部署域名
  */
 const SETTINGS_KEY = 'goodwork.cloud.settings.v1';
 const DEVICE_KEY = 'goodwork.cloud.device.v1';
@@ -55,7 +62,6 @@ export class CloudSync {
 
     this.settings = readJson(SETTINGS_KEY, {
       envId: DEFAULT_ENV_ID,
-      email: '',
       autoSync: true,
       lastSyncAt: '',
     });
@@ -84,7 +90,6 @@ export class CloudSync {
   }
 
   get envId() { return this.settings.envId || ''; }
-  get email() { return this.settings.email || ''; }
   get lastSyncAt() { return this.settings.lastSyncAt || ''; }
 
   isConnected() { return this.connected; }
@@ -95,7 +100,7 @@ export class CloudSync {
       status: this.status,
       connected: this.connected,
       envId: this.envId,
-      email: this.email,
+      deviceId: this.deviceId.slice(0, 8),
       lastSyncAt: this.lastSyncAt,
       autoSync: this.autoSync,
       error: this.errorDetail,
@@ -113,30 +118,30 @@ export class CloudSync {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); } catch { /* noop */ }
   }
 
+  /**
+   * 自动恢复匿名登录态；若未连接过则标记为 need-login 等待用户点击「连接」。
+   */
   async init() {
     if (!this.envId) {
       this.emit('disabled');
       return;
     }
-    if (!this.email) {
-      this.emit('need-login');
-      return;
-    }
     try {
       await this.ensureApp();
+      // 检查是否有匿名登录态
       const loginState = await withTimeout(
         this.auth.getLoginState(),
-        20000,
-        '恢复云开发登录态超时，请检查网络或重新登录。'
+        15000,
+        '检查云开发登录态超时，请检查网络或点击重新连接。'
       );
       if (loginState?.user) {
         this.connected = true;
-        await this.afterLogin({ auto: this.autoSync, silent: true });
+        await this.afterConnect({ auto: this.autoSync, silent: true });
       } else {
         this.emit('need-login');
       }
     } catch (err) {
-      this.emit('error', { message: this.friendlyError(err) });
+      this.emit('need-login', { message: this.friendlyError(err) });
     }
   }
 
@@ -183,70 +188,59 @@ export class CloudSync {
     this.dirty = false;
   }
 
-  async login({ envId, email, password, autoSync }) {
-    if (!envId || !email || !password) throw new Error('请填写环境 ID、邮箱和密码。');
-    await this.ensureApp(envId);
-    this.settings.email = email;
+  /**
+   * 一键连接 —— 匿名登录，无需账号密码。
+   */
+  async connect({ envId, autoSync } = {}) {
+    const targetEnv = (envId && envId.trim()) || this.envId;
+    if (!targetEnv) throw new Error('请先填写云开发环境 ID。');
     this.autoSync = autoSync !== false;
     this.settings.autoSync = this.autoSync;
     this.saveSettings();
+
+    await this.ensureApp(targetEnv);
     this.emit('connecting');
     try {
       await withTimeout(
-        this.auth.signInWithEmailAndPassword(email, password),
+        this.auth.signInAnonymously(),
         30000,
-        '登录云开发超时，请检查网络、安全域名和登录方式配置。'
+        '匿名登录超时，请检查网络或云开发环境。'
       );
     } catch (err) {
-      const message = this.friendlyError(err);
-      this.connected = false;
-      this.emit('error', { message });
-      throw new Error(message);
-    }
-    this.connected = true;
-    await this.afterLogin({ auto: this.autoSync });
-    return true;
-  }
-
-  async register({ envId, email, password, autoSync }) {
-    if (!envId || !email || !password) throw new Error('请填写环境 ID、邮箱和密码。');
-    if (password.length < 6) throw new Error('密码至少 6 位。');
-    await this.ensureApp(envId);
-    this.settings.email = email;
-    this.autoSync = autoSync !== false;
-    this.settings.autoSync = this.autoSync;
-    this.saveSettings();
-    this.emit('connecting');
-    try {
-      await withTimeout(
-        this.auth.signUpWithEmailAndPassword(email, password),
-        30000,
-        '注册云开发账号超时，请检查网络、安全域名和登录方式配置。'
-      );
-      const state = await withTimeout(
-        this.auth.getLoginState(),
-        20000,
-        '检查注册登录态超时，请稍后重试。'
-      );
-      if (!state?.user) {
+      // 兼容部分 SDK 版本使用 anonymousLogin
+      try {
         await withTimeout(
-          this.auth.signInWithEmailAndPassword(email, password),
+          this.auth.anonymousLogin?.() || this.auth.signInAnonymously?.(),
           30000,
-          '注册后自动登录超时，请手动点击登录。'
+          '匿名登录超时，请检查网络或云开发环境。'
         );
+      } catch {
+        const message = this.friendlyError(err);
+        this.connected = false;
+        this.emit('error', { message });
+        throw new Error(message);
       }
-    } catch (err) {
-      const message = this.friendlyError(err);
-      this.connected = false;
-      this.emit('error', { message });
-      throw new Error(message);
     }
     this.connected = true;
-    await this.afterLogin({ auto: this.autoSync });
+    await this.afterConnect({ auto: this.autoSync });
     return true;
   }
 
-  async logout() {
+  /**
+   * 兼容旧的 login() 调用 —— 直接走匿名连接。
+   */
+  async login(opts = {}) {
+    return this.connect(opts);
+  }
+
+  /**
+   * 兼容旧的 register() 调用 —— 直接走匿名连接。
+   */
+  async register(opts = {}) {
+    return this.connect(opts);
+  }
+
+  async disconnect() {
     this.stopWatch();
     try { await this.auth?.signOut?.(); } catch { /* noop */ }
     this.connected = false;
@@ -256,13 +250,20 @@ export class CloudSync {
     this.emit('need-login');
   }
 
-  async afterLogin({ auto = true, silent = false } = {}) {
+  /**
+   * 兼容旧的 logout() 调用。
+   */
+  async logout() {
+    return this.disconnect();
+  }
+
+  async afterConnect({ auto = true, silent = false } = {}) {
     this.emit('connecting');
     try {
       await this.connectData(auto ? 'auto' : 'pull');
       if (this.autoSync) this.startWatch();
       this.emit('connected');
-      if (!silent) this.onToast('云同步已连接', `团队工作区 · ${this.email}`, 'ok');
+      if (!silent) this.onToast('云开发已连接', `匿名设备 · ${this.deviceId.slice(0, 8)}`, 'ok');
       if (this.autoSync) this.syncAllAttachments({ silent: true });
     } catch (err) {
       const message = this.friendlyError(err);
@@ -579,26 +580,32 @@ export class CloudSync {
     const code = String(err?.code || err?.errCode || '');
     const detail = err?.error_description || err?.message || err?.errMsg || err?.error || '';
     const msg = `${code} ${detail || String(err || '未知错误')}`;
+    if (/anonymous.*(not|disabled|enable)|匿名.*(未|不)|anonymous login/i.test(msg)) {
+      return '云开发「匿名登录」未开启，请在云开发控制台 → 登录授权 → 开启匿名登录。';
+    }
     if (/INVALID_USERNAME_OR_PASSWORD|invalid_username_or_password|用户名或密码不正确|INVALID_PASSWORD/i.test(msg)) {
-      return '账号或密码不正确。首次使用请先点击「注册工作区账号」；已有账号请检查邮箱和密码。';
+      return '认证失败。请确认云开发环境 ID 是否正确。';
     }
     if (/USER_NOT_EXIST|user_not_exist|用户不存在/i.test(msg)) {
-      return '该邮箱还没有注册工作区账号，请先点击「注册工作区账号」。';
+      return '云开发未找到用户，请检查是否开启了匿名登录。';
     }
     if (/EMAIL_NOT_VERIFIED|email.*not.*verif|邮箱.*未验证/i.test(msg)) {
-      return '邮箱尚未验证，请先查收验证邮件并完成验证，再回来登录。';
+      return '认证方式错误。本版本使用匿名登录，请在控制台开启匿名登录。';
     }
     if (/INVALID_EMAIL|invalid_email|邮箱格式/i.test(msg)) {
-      return '邮箱格式不正确，请填写有效邮箱。';
+      return '认证方式错误。本版本使用匿名登录，请在控制台开启匿名登录。';
     }
     if (/env.*(not.*exist|invalid)|环境.*(不存在|无效)/i.test(msg)) {
       return '云开发环境 ID 无效或不存在，请检查上方环境 ID。';
     }
     if (/collection.*not.*exist|集合.*不存在|DATABASE_COLLECTION_NOT_EXIST/i.test(msg)) {
-      return `数据库集合 ${COLLECTION} 不存在，请在云开发控制台创建并设置权限。`;
+      return `数据库集合 ${COLLECTION} 不存在，请在云开发控制台创建它。`;
     }
-    if (/login.*(type|method|provider).*(not|disabled|enable)|登录方式.*(未|不)|邮箱登录.*(未|不)/i.test(msg)) {
-      return '邮箱密码登录未开启，请在云开发控制台「登录授权」中开启。';
+    if (/permission|PERMISSION_DENIED|ACCESS_DENIED|权限|auth/i.test(msg)) {
+      return `数据库或存储权限不足：请在云开发控制台把集合 ${COLLECTION} 的权限设为「所有用户可读，仅创建者可写」或自定义安全规则允许匿名读写。`;
+    }
+    if (/login.*(type|method|provider).*(not|disabled|enable)|登录方式.*(未|不)/i.test(msg)) {
+      return '云开发登录方式未开启，请在控制台 → 登录授权 → 开启匿名登录。';
     }
     if (/domain|origin|cors|安全域名|域名.*(白名单|未)/i.test(msg)) {
       return '当前站点未加入云开发安全域名，请在控制台添加本站域名。';

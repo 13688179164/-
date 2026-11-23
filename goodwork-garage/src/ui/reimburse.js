@@ -783,28 +783,17 @@ export class ReimburseBoard {
             <section class="rb-cloud-section">
               <div class="rb-cloud-section-head">
                 <span>01</span>
-                <div><h3>环境与团队工作区账号</h3><p>所有设备登录同一个工作区账号，即可共享报销台账与附件。</p></div>
+                <div><h3>一键连接云开发</h3><p>使用匿名登录，无需账号密码。所有设备连接同一个环境即可共享工作区。</p></div>
               </div>
               <label class="rb-field rb-cloud-field">
                 <span>云开发环境 ID <em>ENV ID</em></span>
-                <input id="rbCloudEnv" placeholder="例如：goodwork-prod-1a2b3c" autocomplete="off" />
+                <input id="rbCloudEnv" placeholder="attractive-starfish-d0bp2e865971" autocomplete="off" />
               </label>
-              <div class="rb-cloud-grid">
-                <label class="rb-field rb-cloud-field">
-                  <span>工作区账号邮箱 <em>EMAIL</em></span>
-                  <input id="rbCloudEmail" type="email" placeholder="team@example.com" autocomplete="username" />
-                </label>
-                <label class="rb-field rb-cloud-field">
-                  <span>密码 <em>PASSWORD</em></span>
-                  <input id="rbCloudPassword" type="password" placeholder="至少 6 位" autocomplete="current-password" />
-                </label>
-              </div>
               <div class="rb-cloud-actions">
-                <button type="button" class="rb-btn primary" data-rb="cloud-login" id="rbCloudLoginBtn">${ICON.cloud}<span>登录并同步</span></button>
-                <button type="button" class="rb-btn ghost" data-rb="cloud-register" id="rbCloudRegisterBtn">${ICON.plus}<span>注册工作区账号</span></button>
-                <button type="button" class="rb-btn ghost" data-rb="cloud-logout" id="rbCloudLogoutBtn">退出登录</button>
+                <button type="button" class="rb-btn primary" data-rb="cloud-connect" id="rbCloudConnectBtn">${ICON.cloud}<span>连接云开发</span></button>
+                <button type="button" class="rb-btn ghost" data-rb="cloud-disconnect" id="rbCloudDisconnectBtn">断开连接</button>
               </div>
-              <p class="rb-cloud-hint">首次使用请先点击「注册工作区账号」创建团队账号；之后所有设备都用同一账号登录。</p>
+              <p class="rb-cloud-hint">首次连接会在云端自动创建工作区；之后每台设备都点同一个「连接云开发」即可同步。</p>
               <div class="rb-cloud-message" id="rbCloudMessage"></div>
             </section>
 
@@ -835,12 +824,12 @@ export class ReimburseBoard {
               </div>
               <ol class="rb-cloud-steps">
                 <li>环境 ID 已预填为 <code>attractive-starfish-d0bp2e865971</code>；如使用其他环境，直接替换上方 ID。</li>
-                <li>开启「邮箱密码登录」；如控制台启用了邮箱验证，请先完成账号验证或由管理员创建账号。</li>
-                <li>创建数据库集合 <code>goodwork_workspaces</code>，权限选择「仅创建者可读写」。</li>
+                <li>在「登录授权」中开启「匿名登录」（本版本免账号密码）。</li>
+                <li>创建数据库集合 <code>goodwork_workspaces</code>，权限选「<strong>所有用户可读，仅创建者可写</strong>」或自定义安全规则允许匿名用户读写 <code>_id === 'team'</code> 的文档。</li>
                 <li>开启云存储；附件会保存到 <code>goodwork/team/</code>。</li>
                 <li>在「安全域名」中加入当前站点：<code id="rbCloudDomain"></code>。</li>
               </ol>
-              <p class="rb-cloud-hint">团队共享模式共用一个工作区账号，请勿把账号密码发送给工作区以外的人。数据库与存储均按该账号隔离。</p>
+              <p class="rb-cloud-hint">所有设备通过匿名登录共享同一个 <code>goodwork_workspaces.team</code> 文档，自动实时同步。本机数据始终保留，离线时仍可继续使用。</p>
             </section>
           </div>
           <footer class="rb-cloud-foot">
@@ -938,15 +927,12 @@ export class ReimburseBoard {
       cloudMeta: $('#rbCloudMeta', shell),
       cloudStatus: $('#rbCloudStatus', shell),
       cloudEnv: $('#rbCloudEnv', shell),
-      cloudEmail: $('#rbCloudEmail', shell),
-      cloudPassword: $('#rbCloudPassword', shell),
       cloudAuto: $('#rbCloudAuto', shell),
       cloudLast: $('#rbCloudLast', shell),
       cloudMessage: $('#rbCloudMessage', shell),
       cloudDomain: $('#rbCloudDomain', shell),
-      cloudLoginBtn: $('#rbCloudLoginBtn', shell),
-      cloudRegisterBtn: $('#rbCloudRegisterBtn', shell),
-      cloudLogoutBtn: $('#rbCloudLogoutBtn', shell),
+      cloudConnectBtn: $('#rbCloudConnectBtn', shell),
+      cloudDisconnectBtn: $('#rbCloudDisconnectBtn', shell),
     };
     this.cardRects = new Map();
   }
@@ -1039,10 +1025,11 @@ export class ReimburseBoard {
       this.cloud?.setAutoSync(this.el.cloudAuto.checked);
       this.renderCloudSettings();
     });
-    this.el.cloudPassword.addEventListener('keydown', (e) => {
+
+    this.el.cloudEnv.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        this.cloudLogin();
+        this.cloudConnect();
       }
     });
 
@@ -1228,9 +1215,8 @@ export class ReimburseBoard {
       case 'statement-export': this.exportStatement(); break;
       case 'cloud': this.openCloudModal(); break;
       case 'cloud-close': this.closeCloudModal(); break;
-      case 'cloud-login': this.cloudLogin(); break;
-      case 'cloud-register': this.cloudRegister(); break;
-      case 'cloud-logout': this.cloudLogout(); break;
+      case 'cloud-connect': this.cloudConnect(); break;
+      case 'cloud-disconnect': this.cloudDisconnect(); break;
       case 'cloud-upload': this.cloudUpload(); break;
       case 'cloud-download': this.cloudDownload(); break;
       case 'cloud-attachments': this.cloudSyncAttachments(); break;
@@ -2878,13 +2864,12 @@ export class ReimburseBoard {
     const cs = this.cloud;
     if (populate) {
       this.el.cloudEnv.value = cs.envId;
-      this.el.cloudEmail.value = cs.email;
     }
     this.el.cloudAuto.checked = cs.autoSync;
     this.el.cloudDomain.textContent = location.host || location.origin;
     const statusLabels = {
       disabled: '未配置',
-      'need-login': '需要登录',
+      'need-login': '未连接',
       connecting: '连接中',
       syncing: '同步中',
       connected: '已连接',
@@ -2894,18 +2879,17 @@ export class ReimburseBoard {
     this.el.cloudStatus.textContent = statusLabels[cs.status] || '未配置';
     this.el.cloudStatus.className = `rb-cloud-status is-${cs.status}`;
     this.el.cloudMeta.textContent = cs.isConnected()
-      ? `团队工作区 · ${cs.email}`
-      : (cs.envId ? '已填写环境，登录后开始同步' : '团队共享一个工作区 · 多设备自动实时同步');
+      ? `匿名设备 · ${cs.deviceId}`
+      : (cs.envId ? '已填写环境，点击连接开始同步' : '填写环境 ID 后连接云开发即可同步');
     this.el.cloudLast.textContent = cs.lastSyncAt
       ? `最近同步 ${localDateTimeFromIso(cs.lastSyncAt)}`
       : '尚未同步';
     this.el.cloudMessage.textContent = cs.errorDetail || '';
     this.el.cloudMessage.classList.toggle('is-error', !!cs.errorDetail);
-    this.el.cloudLoginBtn.disabled = this.cloudBusy || cs.isConnected();
-    this.el.cloudRegisterBtn.disabled = this.cloudBusy || cs.isConnected();
-    this.el.cloudLogoutBtn.disabled = this.cloudBusy || !cs.email;
-    const loginLabel = this.el.cloudLoginBtn.querySelector('span');
-    if (loginLabel) loginLabel.textContent = this.cloudBusy ? '连接中…' : '登录并同步';
+    this.el.cloudConnectBtn.disabled = this.cloudBusy || cs.isConnected();
+    this.el.cloudDisconnectBtn.disabled = this.cloudBusy || !cs.isConnected();
+    const connectLabel = this.el.cloudConnectBtn.querySelector('span');
+    if (connectLabel) connectLabel.textContent = this.cloudBusy ? '连接中…' : '连接云开发';
   }
 
   setCloudBusy(busy) {
@@ -2930,57 +2914,32 @@ export class ReimburseBoard {
     }
   }
 
-  async cloudLogin() {
+  async cloudConnect() {
     if (this.cloudBusy || !this.cloud) return;
     const envId = this.el.cloudEnv.value.trim();
-    const email = this.el.cloudEmail.value.trim();
-    const password = this.el.cloudPassword.value;
-    if (!envId || !email || !password) {
-      this.showCloudError('请填写环境 ID、工作区账号邮箱和密码。');
+    if (!envId) {
+      this.showCloudError('请先填写云开发环境 ID。');
       return;
     }
     this.clearCloudError();
     this.setCloudBusy(true);
     try {
-      await this.cloud.login({ envId, email, password, autoSync: this.el.cloudAuto.checked });
-      this.el.cloudPassword.value = '';
+      await this.cloud.connect({ envId, autoSync: this.el.cloudAuto.checked });
       this.renderCloudSettings();
     } catch (err) {
-      this.showCloudError(err.message || '登录失败');
+      this.showCloudError(err.message || '连接云开发失败');
     } finally {
       this.setCloudBusy(false);
     }
   }
 
-  async cloudRegister() {
-    if (this.cloudBusy || !this.cloud) return;
-    const envId = this.el.cloudEnv.value.trim();
-    const email = this.el.cloudEmail.value.trim();
-    const password = this.el.cloudPassword.value;
-    if (!envId || !email || !password) {
-      this.showCloudError('请填写环境 ID、工作区账号邮箱和密码。');
-      return;
-    }
-    this.clearCloudError();
-    this.setCloudBusy(true);
-    try {
-      await this.cloud.register({ envId, email, password, autoSync: this.el.cloudAuto.checked });
-      this.el.cloudPassword.value = '';
-      this.renderCloudSettings();
-    } catch (err) {
-      this.showCloudError(err.message || '注册失败');
-    } finally {
-      this.setCloudBusy(false);
-    }
-  }
-
-  async cloudLogout() {
+  async cloudDisconnect() {
     if (this.cloudBusy || !this.cloud) return;
     this.setCloudBusy(true);
     try {
-      await this.cloud.logout();
+      await this.cloud.disconnect();
       this.renderCloudSettings();
-      this.toast('已退出云同步', '本机数据仍保留，可随时重新登录。');
+      this.toast('已断开云开发', '本机数据仍保留，可随时重新连接。');
     } finally {
       this.setCloudBusy(false);
     }
@@ -2988,7 +2947,7 @@ export class ReimburseBoard {
 
   async cloudUpload() {
     if (!this.cloud?.isConnected()) {
-      this.showCloudError('请先登录云同步。');
+      this.showCloudError('请先连接云开发。');
       return;
     }
     await this.cloud.pushNow({ force: true, override: true });
@@ -2997,7 +2956,7 @@ export class ReimburseBoard {
 
   async cloudDownload() {
     if (!this.cloud?.isConnected()) {
-      this.showCloudError('请先登录云同步。');
+      this.showCloudError('请先连接云开发。');
       return;
     }
     try {
@@ -3010,7 +2969,7 @@ export class ReimburseBoard {
 
   async cloudSyncAttachments() {
     if (!this.cloud?.isConnected()) {
-      this.showCloudError('请先登录云同步。');
+      this.showCloudError('请先连接云开发。');
       return;
     }
     await this.cloud.syncAllAttachments();
