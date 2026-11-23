@@ -811,11 +811,23 @@ export class CloudSync {
     this.stopPoll();
     if (!this.connected) return;
     this.pollTimer = setInterval(() => this.pollTick(), POLL_INTERVAL_MS);
+    // 🔧 终极保险：每 15 秒自动把 localStorage 数据推上云（不管 markLocalChange 有没有被调用）
+    this.autoPushTimer = setInterval(() => {
+      if (this.connected && !this.syncing) {
+        const state = this.getState();
+        if ((state.tasks || []).length > 0) {
+          console.log('[cloudSync] ⏰ 定时自动推 (15s) tasks=' + state.tasks.length);
+          this.pushNow({ silent: true }).catch(() => {});
+        }
+      }
+    }, 15000);
   }
 
   stopPoll() {
     clearInterval(this.pollTimer);
+    clearInterval(this.autoPushTimer);
     this.pollTimer = null;
+    this.autoPushTimer = null;
   }
 
   async pollTick() {
