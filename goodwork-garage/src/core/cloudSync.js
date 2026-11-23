@@ -672,19 +672,28 @@ export class CloudSync {
     this.emit('syncing');
 
     try {
+      console.log('[cloudSync] pushNow ▶️ start connected=' + this.connected + ' dirty=' + this.dirty + ' force=' + force);
       const state = this.getState();
+      console.log('[cloudSync] pushNow ▶️ state.tasks=' + (state?.tasks?.length || 0) + ' processedEvents=' + (state?.processedEvents?.length || 0));
       const now = nowIso();
 
       // --- 1. upsert 所有 tasks ---
       const taskRows = (state.tasks || []).map((t) => this.taskToRow(t, now));
+      console.log('[cloudSync] pushNow ▶️ taskRows=' + taskRows.length);
       if (taskRows.length > 0) {
-        await withTimeout(
-          pgRequest('POST', this.envId, 'goodwork_tasks', {
-            body: taskRows,
-            prefer: 'resolution=merge-duplicates',
-          }),
-          20000, '上传任务到云端超时'
-        );
+        try {
+          const pgRes = await withTimeout(
+            pgRequest('POST', this.envId, 'goodwork_tasks', {
+              body: taskRows,
+              prefer: 'resolution=merge-duplicates',
+            }),
+            20000, '上传任务到云端超时'
+          );
+          console.log('[cloudSync] pushNow ✅ tasks upsert OK');
+        } catch (pgErr) {
+          console.error('[cloudSync] pushNow ❌ tasks upsert FAILED:', pgErr);
+          throw pgErr;  // 让外层 catch 处理
+        }
       }
 
       // --- 2. upsert 所有 attachments ---
