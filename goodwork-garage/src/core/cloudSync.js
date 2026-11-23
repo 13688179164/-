@@ -694,8 +694,21 @@ export class CloudSync {
       console.log('[cloudSync] pushNow ▶️ state.tasks=' + (state?.tasks?.length || 0) + ' processedEvents=' + (state?.processedEvents?.length || 0));
       const now = nowIso();
 
-      // --- 1. upsert 所有 tasks ---
-      const taskRows = (state.tasks || []).map((t) => this.taskToRow(t, now));
+      // 🔧 上传前先把云端数据拉下来做一次合并：按 id 取 updatedAt 较新的那条。
+      //    避免某台设备用"旧副本"覆盖另一台设备刚保存的新内容。
+      let remoteTasks = [];
+      try {
+        const rRows = await pgRequest('GET', this.envId, 'goodwork_tasks', {
+          select: '*', order: ['updated_at.desc'], limit: 5000,
+        });
+        remoteTasks = rRows.map((r) => this.rowToTask(r));
+      } catch (e) {
+        console.warn('[cloudSync] push 前拉取云端失败，跳过合并:', e?.message);
+      }
+      const finalTasks = mergeByUpdatedAt(state.tasks || [], remoteTasks);
+
+      // --- 1. upsert 所有 tasks（每条用它自己的 updatedAt，保持不变）---
+      const taskRows = finalTasks.map((t) => this.taskToRow(t, t.updatedAt || now));
       console.log('[cloudSync] pushNow ▶️ taskRows=' + taskRows.length);
       if (taskRows.length > 0) {
         try {
@@ -715,7 +728,7 @@ export class CloudSync {
 
       // --- 2. upsert 所有 attachments ---
       const attachRows = [];
-      for (const t of state.tasks || []) {
+      for (const t of finalTasks) {
         for (const a of t.attachments || []) {
           attachRows.push(sanitizeRow({
             id: a.id ?? '',
@@ -839,20 +852,37 @@ export class CloudSync {
   async pollTick() {
     if (!this.connected || this.applying || this.syncing) return;
     try {
-      const since = this.lastRemoteUpdatedAt || '1970-01-01T00:00:00.000Z';
+      // 🔧 全量拉取（数据量小），不再依赖 updated_at 时间过滤：
+      //    多台设备的系统时钟可能有偏差，用 gt.since 会漏掉"时钟慢"的那台设备写入的数据。
       const rows = await pgRequest('GET', this.envId, 'goodwork_tasks', {
         select: '*',
-        filter: { 'updated_at': `gt.${since}` },
         order: ['updated_at.desc'],
-        limit: 500,
+        limit: 2000,
       });
 
       const pRows = await pgRequest('GET', this.envId, 'goodwork_processed', {
         select: '*',
-        filter: { 'created_at': `gt.${since}` },
+        order: ['created_at.desc'],
+        limit: 2000,
       });
 
-      const hasNewRemote = (rows?.length || 0) + (pRows?.length || 0) > 0;
+      const remoteAllTasks = rows.map((r) => this.rowToTask(r));
+      const local = this.getState();
+      const localById = new Map((local.tasks || []).map((t) => [t.id, t]));
+
+      // 判断云端是否有"更新的/本地没有的"数据
+      const hasNewRemoteTask = remoteAllTasks.some((rt) => {
+        const lt = localById.get(rt.id);
+        if (!lt) return true;
+        return (rt.updatedAt || '') > (lt.updatedAt || '');
+      });
+      const localProcIds = new Set(
+        (local.processedEvents || []).map((e) => `${e.taskId}|${e.eventDate}|${e.createdAt || ''}`)
+      );
+      const hasNewRemoteProc = pRows.some(
+        (r) => !localProcIds.has(`${r.task_id}|${r.event_date}|${r.created_at || ''}`)
+      );
+      const hasNewRemote = hasNewRemoteTask || hasNewRemoteProc;
 
       // 如果云端没有新数据，只是本地 dirty 了（用户在别的设备改了），触发 push
       if (!hasNewRemote) {
@@ -864,8 +894,8 @@ export class CloudSync {
         return;
       }
 
-      // 有新的云端数据 → 只合并这些增量，不要拉全量覆盖本地！
-      const remoteIncrementalTasks = rows.map((r) => this.rowToTask(r));
+      // 有新的云端数据 → 合并（按 id 取 updatedAt 较新），不要拉全量覆盖本地！
+      const remoteIncrementalTasks = remoteAllTasks;
       const remoteIncrementalProc = pRows.map((r) => ({
         taskId: r.task_id,
         eventDate: r.event_date,
@@ -876,7 +906,6 @@ export class CloudSync {
         createdAt: r.created_at,
       }));
 
-      const local = this.getState();
       const mergedTasks = mergeByUpdatedAt(local.tasks || [], remoteIncrementalTasks);
       const mergedProc = mergeByUpdatedAt(local.processedEvents || [], remoteIncrementalProc);
 
