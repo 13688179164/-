@@ -330,12 +330,12 @@ export class CloudSync {
   }
 
   async connectData(mode = 'auto') {
-    // 拉全量（带附件关联）
+    // 拉全量任务（不带关联，避免 PostgREST schema cache 的 PGRST200 错误）
     let rows = [];
     try {
       const res = await withTimeout(
         this.rdb.from('goodwork_tasks')
-          .select('*, attachments(*)')
+          .select('*')
           .order('updated_at', { ascending: false })
           .limit(5000),
         20000,
@@ -344,11 +344,31 @@ export class CloudSync {
       rows = assertOk(res, '读取任务');
     } catch (err) {
       // 表不存在 → 首次使用
-      if (/relation|does not exist|42P01/.test(err.message) || err.__code === '42P01') {
+      if (/relation|does not exist|42P01|PGRST200/.test(err.message) || err.__code === '42P01') {
         rows = [];
       } else {
         throw err;
       }
+    }
+
+    // 单独拉附件
+    let attachRows = [];
+    if (rows.length > 0) {
+      try {
+        const aRes = await withTimeout(
+          this.rdb.from('goodwork_attachments').select('*'),
+          20000, '读取附件超时'
+        );
+        attachRows = assertOk(aRes, '读取附件');
+      } catch { attachRows = []; }
+    }
+
+    // 构建 task_id → attachments 索引
+    const attachByTask = new Map();
+    for (const a of attachRows) {
+      const list = attachByTask.get(a.task_id) || [];
+      list.push(a);
+      attachByTask.set(a.task_id, list);
     }
 
     let processed = [];
@@ -361,10 +381,17 @@ export class CloudSync {
       processed = assertOk(pRows, '读取已报销');
     } catch { processed = []; }
 
-    // PG 返回的 attachments 是嵌套数组，需要在 rowToTask 里处理
     const remoteTasks = rows.map((r) => {
       const t = this.rowToTask(r);
-      // 如果 attachments 关联查询没返回，而 cloud_file_ids 里有 → 补 cloudFileId
+      // 1. 先从 goodwork_attachments 关联表补
+      const linked = attachByTask.get(r.id) || [];
+      if (linked.length) {
+        t.attachments = linked.map((a) => ({
+          id: a.id, cloudFileId: a.cloud_file_id || '', name: a.name || '',
+          size: Number(a.size) || 0, type: a.mime_type || '',
+        }));
+      }
+      // 2. 如果还没有，尝试从 cloud_file_ids JSONB 里补（兼容性）
       if (!t.attachments?.length && r.cloud_file_ids) {
         try {
           const cids = typeof r.cloud_file_ids === 'string' ? JSON.parse(r.cloud_file_ids) : r.cloud_file_ids;
@@ -582,7 +609,7 @@ export class CloudSync {
       // 只拉比 lastRemoteUpdatedAt 更新的数据
       const since = this.lastRemoteUpdatedAt || '1970-01-01T00:00:00.000Z';
       const res = await this.rdb.from('goodwork_tasks')
-        .select('*, attachments(*)')
+        .select('*')
         .gt('updated_at', since)
         .order('updated_at', { ascending: false })
         .limit(500);
@@ -593,6 +620,23 @@ export class CloudSync {
         .select()
         .gt('created_at', since);
       const pRows = assertOk(pres, '增量拉取已报销');
+
+      // 单独拉附件
+      let attachRows = [];
+      if ((rows?.length || 0) > 0) {
+        try {
+          const aRes = await this.rdb.from('goodwork_attachments').select('*');
+          attachRows = assertOk(aRes, '增量拉取附件');
+        } catch { /* noop */ }
+      }
+      const attachByTask = new Map();
+      for (const a of attachRows) {
+        const list = attachByTask.get(a.task_id) || [];
+        list.push(a); attachByTask.set(a.task_id, list);
+      }
+      for (const r of rows) {
+        r.__attachments = attachByTask.get(r.id) || [];
+      }
 
       if ((rows?.length || 0) + (pRows?.length || 0) === 0) {
         this.lastPollAt = Date.now();
