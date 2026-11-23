@@ -24,6 +24,35 @@ import { QuestSystem } from './systems/quest.js?v=20261123v93';
 import { AudioEngine } from './audio.js?v=20261123v93';
 import { UI } from './ui/ui.js?v=20261123v93';
 import { ReimburseBoard } from './ui/reimburse.js?v=20261123v93';
+import { CloudSync } from './core/cloudSync.js?v=20261123v93';
+
+// 🛠️ 在任何 UI 初始化之前，先建立一个独立的 CloudSync 单例
+// 这样即使 ReimburseBoard 或 WebGL 有问题，云端同步也能工作
+const __globalCloudSync = new CloudSync({
+  getState: () => window.__goodworkAppState || { tasks: [], processedEvents: [] },
+  applyState: (state, meta) => {
+    window.__goodworkAppState = window.__goodworkAppState || {};
+    window.__goodworkAppState.tasks = state.tasks || [];
+    window.__goodworkAppState.processedEvents = state.processedEvents || [];
+    console.log('[globalCloudSync] applyState:', state.tasks?.length, 'tasks, meta=', meta);
+    // 如果 ReimburseBoard 已存在，也通知它
+    if (window.__goodworkApp?.reimburse?.applyCloudState) {
+      try { window.__goodworkApp.reimburse.applyCloudState(state, meta); } catch {}
+    }
+  },
+  onStatus: (status, detail) => console.log('[globalCloudSync] onStatus:', status, detail?.message || ''),
+  onToast: (title, desc, type) => console.log('[globalCloudSync] toast:', title, type),
+});
+window.__cloudSync = __globalCloudSync;
+window.__cloudSyncApp = __globalCloudSync;
+// 立即初始化 —— 不阻塞页面渲染
+__globalCloudSync.init().then(() => {
+  const s = __globalCloudSync.getStatus();
+  console.log('%c[globalCloudSync] init 完成', 'color:#0099ff;font-weight:bold', `connected=${s.connected}`);
+}).catch(e => {
+  console.error('[globalCloudSync] init 失败:', e?.message || e);
+});
+console.log('%c[globalCloudSync] 已创建，等待 init...', 'color:#0099ff');
 
 const nextPaint = () => new Promise((resolve) => {
   requestAnimationFrame(() => requestAnimationFrame(resolve));

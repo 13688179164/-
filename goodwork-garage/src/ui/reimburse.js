@@ -293,7 +293,7 @@ export class ReimburseBoard {
     this._bind();
     this.renderAll({ animate: false });
     this.initFolder();
-    this.cloud = new CloudSync({
+    this.cloud = window.__cloudSync || new CloudSync({
       getState: () => this.getCloudState(),
       applyState: (state, meta) => this.applyCloudState(state, meta),
       getAttachmentBlob: (id) => readAttachmentBlob(id),
@@ -301,16 +301,25 @@ export class ReimburseBoard {
       onStatus: (status, detail) => this.onCloudStatus(status, detail),
       onToast: (title, desc, type) => this.toast(title, desc, type),
     });
+    // 不管是不是复用的全局实例，都更新回调绑定到当前 ReimburseBoard
+    this.cloud.getState = () => this.getCloudState();
+    this.cloud.applyState = (state, meta) => this.applyCloudState(state, meta);
+    this.cloud.onStatus = (status, detail) => this.onCloudStatus(status, detail);
+    this.cloud.onToast = (title, desc, type) => this.toast(title, desc, type);
+    window.__cloudSync = this.cloud;
+    window.__cloudSyncApp = this.cloud;
     this.cloud.onStatus(this.cloud.status, this.cloud.getStatus());
-    // 🔧 init() 返回 Promise，等它完成后打印状态
-    this.cloud.init().then(() => {
-      const s = this.cloud.getStatus();
-      console.log('%c[reimburse] cloud.init() 完成', 'color:#0a6', `connected=${s.connected} autoSync=${s.autoSync}`);
-      if (s.error) console.warn('[reimburse] init error detail:', s.error);
-    }).catch(e => {
-      console.error('[reimburse] cloud.init() 抛异常:', e);
-      console.log('[reimburse] 当前状态:', this.cloud.getStatus());
-    });
+    console.log('%c[ReimburseBoard] CloudSync 实例就绪', 'color:#0a6', `connected=${this.cloud.isConnected()}`);
+    // 如果还没连，手动 init 一次
+    if (!this.cloud.isConnected()) {
+      this.cloud.init().then(() => {
+        const s = this.cloud.getStatus();
+        console.log('%c[reimburse] cloud.init() 完成', 'color:#0a6', `connected=${s.connected}`);
+        if (s.error) console.warn('[reimburse] init error detail:', s.error);
+      }).catch(e => {
+        console.error('[reimburse] cloud.init() 抛异常:', e);
+      });
+    }
     } catch (e) {
       console.error('[ReimburseBoard] 构造函数抛异常:', e);
       console.error('  栈:', e.stack);
