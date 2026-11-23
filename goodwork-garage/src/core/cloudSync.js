@@ -360,7 +360,7 @@ export class CloudSync {
         // 🔧 init 完成后，如果之前标记了 dirty，立刻推
         if (this.dirty) {
           console.log('[cloudSync] init 完成，补推之前的 dirty 数据');
-          await this.pushNow({ force: true, silent: true });
+          await this.pushNow({ force: true, silent: true, _internal: true });
         }
       } catch (err) {
         console.warn('[cloudSync] init 自动连接失败（用户需手动点连接）:', err?.message || err);
@@ -568,7 +568,7 @@ export class CloudSync {
     const localHasData = (local.tasks?.length || 0) + (local.processedEvents?.length || 0) > 0;
 
     if (mode === 'push') {
-      await this.pushNow({ force: true, silent: true });
+      await this.pushNow({ force: true, silent: true, _internal: true });
       return;
     }
     if (mode === 'pull') {
@@ -593,7 +593,7 @@ export class CloudSync {
     if (localHasData && remoteTasks.length === 0) {
       // 云端空 → 推送本地
       this.dirty = true;
-      await this.pushNow({ force: true, silent: true });
+      await this.pushNow({ force: true, silent: true, _internal: true });
       return;
     }
 
@@ -622,7 +622,7 @@ export class CloudSync {
     this.settings.lastSyncAt = this.localChangedAt;
     this.saveSettings();
     // 立刻推送合并后的结果到云端
-    await this.pushNow({ force: true, silent: true });
+    await this.pushNow({ force: true, silent: true, _internal: true });
   }
 
   applyRemote(tasks, processed, { force = false, silent = false } = {}) {
@@ -670,7 +670,7 @@ export class CloudSync {
 
   // ========== 上传（本地 → PG）==========
 
-  async pushNow({ force = false, silent = false } = {}) {
+  async pushNow({ force = false, silent = false, _internal = false } = {}) {
     // 🔧 如果还没连但 init 在跑，等它
     if (!this.connected && this._initPromise) {
       console.log('[cloudSync] pushNow: 等待 init 完成...');
@@ -792,8 +792,12 @@ export class CloudSync {
     } catch (err) {
       console.error('[cloudSync] pushNow FAILED:', err);
       const friendlyMsg = this.friendlyError(err);
-      this.emit('error', { message: friendlyMsg, err });
-      if (!silent) this.onToast('云端上传失败', friendlyMsg);
+      // 🔧 内部自动推送（init/connectData/15s定时）失败不 emit('error')，不破坏 UI 状态
+      // 只有用户主动触发（非 _internal）才显示"同步异常"
+      if (!_internal) {
+        this.emit('error', { message: friendlyMsg, err });
+        if (!silent) this.onToast('云端上传失败', friendlyMsg);
+      }
       return false;
     } finally {
       this.syncing = false;
@@ -817,7 +821,7 @@ export class CloudSync {
         const state = this.getState();
         if ((state.tasks || []).length > 0) {
           console.log('[cloudSync] ⏰ 定时自动推 (15s) tasks=' + state.tasks.length);
-          this.pushNow({ silent: true }).catch(() => {});
+          this.pushNow({ silent: true, _internal: true }).catch(() => {});
         }
       }
     }, 15000);
@@ -899,12 +903,11 @@ export class CloudSync {
 
       // 增量处理完后，如果还有本地独有数据 dirty，继续推送
       if (this.dirty) {
-        await this.pushNow({ silent: true });
+        await this.pushNow({ silent: true, _internal: true });
       }
     } catch (err) {
-      if (Date.now() - (this.lastPollAt || 0) > 30000) {
-        this.emit('error', { message: '轮询云端超时：' + this.friendlyError(err), err });
-      }
+      // 🔧 轮询是后台静默行为，失败只 log 不 emit —— 不让 UI 显示「同步异常」
+      console.warn('[cloudSync] pollTick 失败（静默）:', err?.message?.slice(0, 100));
     }
   }
 
@@ -933,7 +936,7 @@ export class CloudSync {
   async syncAllAttachments({ silent = false } = {}) {
     if (!this.connected) return 0;
     // 触发一次 push 让附件元数据同步
-    await this.pushNow({ force: true, silent: true });
+    await this.pushNow({ force: true, silent: true, _internal: true });
     this.emit('connected');
     return 0;
   }
