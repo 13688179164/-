@@ -260,8 +260,14 @@ export class CloudSync {
     this.lastPollAt = null;
     this.lastRemoteUpdatedAt = '';
     this.errorDetail = '';
-    // 🔧 删除墓碑：记录被删除的任务 id，防止它被其他设备/云端重新"复活"
-    this.deletedIds = new Set(Array.isArray(this.settings.deletedIds) ? this.settings.deletedIds : []);
+    // 🔧 删除墓碑：id → 删除时间戳(ms)。只有"更新时间早于删除时间"的任务才会被清除，
+    //    避免误删，也允许删除后重新创建/编辑同一条记录。
+    this.deletedIds = new Map();
+    const legacyDel = Array.isArray(this.settings.deletedIds) ? this.settings.deletedIds : [];
+    for (const it of legacyDel) {
+      if (typeof it === 'string') this.deletedIds.set(it, Date.now());
+      else if (it && it.id) this.deletedIds.set(it.id, Number(it.at) || Date.now());
+    }
 
     // 🛠️ 调试：挂到 window 上，方便 Console 手动测
     if (typeof window !== 'undefined') {
@@ -457,26 +463,39 @@ export class CloudSync {
   }
 
   taskToRow(task, updatedAt) {
-    // 🔧 PostgreSQL 字段长度保护：以下字段全是 varchar(40)
+    // 🔧 PostgreSQL 字段长度保护（已实测）：
+    //    id varchar(40) / writer_device_id varchar(40)
+    //    status varchar(20) / reimbursed_from varchar(20)
+    //    applicant、department、category 更宽，无需截断
     const v40 = (v) => String(v ?? '').slice(0, 40);
+    const v20 = (v) => String(v ?? '').slice(0, 20);
+    // 🔧 order_num 是 integer(int4)，上限 2147483647；毫秒时间戳(1.8e12)会溢出 → 22003
+    const orderInt = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return 0;
+      let i = Math.trunc(n);
+      if (i > 2147483647) i = Math.floor(i / 1000);
+      if (i < -2147483648) i = 0;
+      return i;
+    };
     const row = {
       id: v40(task.id),
-      applicant: v40(task.applicant),
+      applicant: String(task.applicant ?? ''),
       amount: task.amount ?? 0,
-      department: v40(task.department),
-      category: v40(task.category),
+      department: String(task.department ?? ''),
+      category: String(task.category ?? ''),
       applied_at: task.appliedAt ?? null,
       content: task.content ?? '',  // text 类型，没长度限制
-      status: v40(task.status),
+      status: v20(task.status),
       has_invoice: !!task.hasInvoice,
       invoice_received: !!task.invoiceReceived,
       invoice_received_at: task.invoiceReceivedAt ?? null,
       reimbursed_at: task.reimbursedAt ?? null,
-      reimbursed_from: v40(task.reimbursedFrom),
+      reimbursed_from: task.reimbursedFrom == null ? null : v20(task.reimbursedFrom),
       high_value_part: task.highValuePart ?? null,
       cross_month: task.crossMonth ?? null,
       stocking_cost: task.stockingCost ?? null,
-      order_num: task.order ?? 0,
+      order_num: orderInt(task.order),
       cloud_file_ids: (task.attachments || [])
         .filter((a) => a.cloudFileId)
         .map((a) => ({ id: a.id, cloudFileId: a.cloudFileId })),
@@ -558,7 +577,7 @@ export class CloudSync {
         } catch { /* noop */ }
       }
       return t;
-    }).filter((t) => !this.deletedIds.has(t.id));
+    }).filter((t) => !this.isTombstoned(t));
 
     const remoteProcessed = processed.map((r) => ({
       taskId: r.task_id,
@@ -572,7 +591,7 @@ export class CloudSync {
 
     const local = this.getState();
     // 🔧 墓碑过滤：本地已被删除的任务不再参与合并/推送
-    const localTasks = (local.tasks || []).filter((t) => !this.deletedIds.has(t.id));
+    const localTasks = (local.tasks || []).filter((t) => !this.isTombstoned(t));
     const localHasData = localTasks.length + (local.processedEvents?.length || 0) > 0;
 
     if (mode === 'push') {
@@ -678,8 +697,21 @@ export class CloudSync {
   // ========== 删除墓碑（多设备删除同步）==========
 
   saveTombstones() {
-    this.settings.deletedIds = [...this.deletedIds].slice(-2000);
+    // 只保留最近 500 条
+    this.settings.deletedIds = [...this.deletedIds]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 500)
+      .map(([id, at]) => ({ id, at }));
     this.saveSettings();
+  }
+
+  /** 某条任务是否已被删除（任务更新时间晚于删除时间则视为"删除后重新编辑"，保留） */
+  isTombstoned(task) {
+    if (!task || !task.id) return false;
+    const at = this.deletedIds.get(task.id);
+    if (!at) return false;
+    const t = Date.parse(task.updatedAt || task.createdAt || '') || 0;
+    return t <= at;
   }
 
   async loadTombstonesFromCloud() {
@@ -688,13 +720,21 @@ export class CloudSync {
         select: 'value', filter: { key: 'eq.deleted_ids' }, limit: 1,
       });
       const row = Array.isArray(rows) ? rows[0] : null;
-      if (!row || !row.value) return false;
-      const ids = JSON.parse(row.value);
-      if (!Array.isArray(ids)) return false;
-      let changed = false;
-      for (const id of ids) {
-        if (id && !this.deletedIds.has(id)) { this.deletedIds.add(id); changed = true; }
+      // 云端为空 → 以云端为准（清空本地墓碑），防止历史错误墓碑继续删数据
+      const next = new Map();
+      if (row && row.value) {
+        let ids = [];
+        try { ids = JSON.parse(row.value); } catch { ids = []; }
+        if (Array.isArray(ids)) {
+          for (const it of ids) {
+            if (typeof it === 'string') next.set(it, Date.now());
+            else if (it && it.id) next.set(it.id, Number(it.at) || Date.now());
+          }
+        }
       }
+      const changed = next.size !== this.deletedIds.size
+        || [...next].some(([id, at]) => this.deletedIds.get(id) !== at);
+      this.deletedIds = next;
       if (changed) this.saveTombstones();
       return changed;
     } catch (e) { /* meta 表不存在时忽略 */ return false; }
@@ -702,8 +742,9 @@ export class CloudSync {
 
   async pushTombstones() {
     try {
+      const value = JSON.stringify([...this.deletedIds].map(([id, at]) => ({ id, at })));
       await pgRequest('POST', this.envId, 'goodwork_meta', {
-        body: [{ key: 'deleted_ids', value: JSON.stringify([...this.deletedIds]), updated_at: nowIso() }],
+        body: [{ key: 'deleted_ids', value, updated_at: nowIso() }],
         prefer: 'resolution=merge-duplicates',
       });
     } catch (e) { console.warn('[cloudSync] 写入删除墓碑失败:', e?.message); }
@@ -712,7 +753,7 @@ export class CloudSync {
   /** 删除一条报销：本地立即移除 + 云端删行 + 写墓碑，防止其他设备再推回来 */
   async recordDeletion(id) {
     if (!id) return;
-    this.deletedIds.add(id);
+    this.deletedIds.set(id, Date.now());
     this.saveTombstones();
     try {
       const st = this.getState();
@@ -731,9 +772,30 @@ export class CloudSync {
     await this.pushTombstones();
   }
 
+  /** 修复本地超长字段：id > 40 位重新生成，status/reimbursedFrom 截断到 20 */
+  repairLongValues() {
+    const st = this.getState();
+    let changed = false;
+    const tasks = (st.tasks || []).map((t) => {
+      const next = { ...t };
+      if (!next.id || String(next.id).length > 40) {
+        next.id = 'GW-RB-' + Math.random().toString(36).slice(2, 10);
+        changed = true;
+      }
+      if (next.status && String(next.status).length > 20) { next.status = String(next.status).slice(0, 20); changed = true; }
+      if (next.reimbursedFrom && String(next.reimbursedFrom).length > 20) { next.reimbursedFrom = String(next.reimbursedFrom).slice(0, 20); changed = true; }
+      return next;
+    });
+    if (changed) {
+      console.warn('[cloudSync] 已修复超长字段，重新写入本地');
+      this.applyState({ tasks, processedEvents: st.processedEvents || [] }, { source: 'cloud', silent: true });
+    }
+    return changed;
+  }
+
   // ========== 上传（本地 → PG）==========
 
-  async pushNow({ force = false, silent = false, _internal = false } = {}) {
+  async pushNow({ force = false, silent = false, _internal = false, _retried = false } = {}) {
     // 🔧 如果还没连但 init 在跑，等它
     if (!this.connected && this._initPromise) {
       console.log('[cloudSync] pushNow: 等待 init 完成...');
@@ -767,7 +829,7 @@ export class CloudSync {
         console.warn('[cloudSync] push 前拉取云端失败，跳过合并:', e?.message);
       }
       const finalTasks = mergeByUpdatedAt(state.tasks || [], remoteTasks)
-        .filter((t) => !this.deletedIds.has(t.id));
+        .filter((t) => !this.isTombstoned(t));
 
       // --- 1. upsert 所有 tasks（每条用它自己的 updatedAt，保持不变）---
       const taskRows = finalTasks.map((t) => this.taskToRow(t, t.updatedAt || now));
@@ -868,6 +930,15 @@ export class CloudSync {
       return true;
     } catch (err) {
       console.error('[cloudSync] pushNow FAILED:', err);
+      const errMsg = String(err?.message || '');
+      // 🔧 自愈：老数据里 id 超过 40 位 / 字段超长 → 修复本地数据后重试一次
+      if (!_retried && /22001|too long for type character varying/i.test(errMsg)) {
+        console.warn('[cloudSync] 检测到字段超长（22001），自动修复本地数据后重试…');
+        try {
+          this.repairLongValues();
+          return await this.pushNow({ force, silent, _internal, _retried: true });
+        } catch (e2) { /* 继续走失败分支 */ }
+      }
       const friendlyMsg = this.friendlyError(err);
       // 🔧 内部自动推送（init/connectData/15s定时）失败不 emit('error')，不破坏 UI 状态
       // 只有用户主动触发（非 _internal）才显示"同步异常"
@@ -932,9 +1003,9 @@ export class CloudSync {
       await this.loadTombstonesFromCloud();
 
       const remoteAllTasks = rows.map((r) => this.rowToTask(r))
-        .filter((t) => !this.deletedIds.has(t.id));
+        .filter((t) => !this.isTombstoned(t));
       const local = this.getState();
-      const localTasks = (local.tasks || []).filter((t) => !this.deletedIds.has(t.id));
+      const localTasks = (local.tasks || []).filter((t) => !this.isTombstoned(t));
       const tombstoneChanged = localTasks.length !== (local.tasks || []).length;
       const localById = new Map(localTasks.map((t) => [t.id, t]));
 

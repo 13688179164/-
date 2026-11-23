@@ -7,7 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   createSampleTasks, BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261123v914';
-import { CloudSync } from '../core/cloudSync.js?v=20261123v916';
+import { CloudSync } from '../core/cloudSync.js?v=20261123v919';
 
 /* ------------------------------------------------------------------ */
 /* 基础工具                                                            */
@@ -441,7 +441,8 @@ export class ReimburseBoard {
 
   normalizeTask(t) {
     return {
-      id: t.id || uid('GW-RB'),
+      // 🔧 云端 id 字段是 varchar(40)，旧数据里超过 40 位的 id 会导致 DATABASE_22001
+      id: (t.id && String(t.id).length > 0 && String(t.id).length <= 40) ? t.id : uid('GW-RB'),
       applicant: String(t.applicant || ''),
       amount: Number(t.amount) || 0,
       department: DEPARTMENTS.includes(t.department) ? t.department : '其他',
