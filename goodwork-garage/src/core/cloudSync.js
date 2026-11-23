@@ -55,6 +55,14 @@ function withTimeout(promise, ms, message) {
  * @param {object} opts - { select, order, limit, filter, body, prefer }
  * @returns {Promise<Array|object>} 解析后的 JSON 数组或对象
  */
+let _pgDebug = null;
+function pgLog() {
+  if (_pgDebug === null) {
+    try { _pgDebug = localStorage.getItem('goodwork.cloud.debug') === '1'; } catch { _pgDebug = false; }
+  }
+  return _pgDebug;
+}
+
 async function pgRequest(method, envId, table, opts = {}) {
   const url = new URL(`${pgBaseUrl(envId)}/${table}`);
 
@@ -79,25 +87,51 @@ async function pgRequest(method, envId, table, opts = {}) {
     fetchOpts.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
   }
 
-  const resp = await fetch(url.toString(), fetchOpts);
+  const fullUrl = url.toString();
+  const start = Date.now();
+  if (pgLog()) console.log(`[pg] ${method} ${table} ${url.search} →`, fullUrl);
 
-  if (resp.status === 204) return null;
+  let resp;
+  try {
+    resp = await fetch(fullUrl, fetchOpts);
+  } catch (netErr) {
+    // 网络级错误（CORS、DNS、连接拒绝等）
+    const diag = `fetch ${method} ${table} 网络错误: ${netErr?.name || ''} ${netErr?.message || netErr}`;
+    console.error('[pg] FATAL', diag);
+    const e = new Error(diag);
+    e.code = 'NETWORK';
+    e.cause = netErr;
+    throw e;
+  }
+
+  const elapsed = Date.now() - start;
+
+  if (resp.status === 204) {
+    if (pgLog()) console.log(`[pg] ✓ 204 ${table} (${elapsed}ms)`);
+    return null;
+  }
 
   let text;
   try { text = await resp.text(); } catch { text = ''; }
   let data;
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
 
-  // PostgREST 错误格式: { code, message, details, hint }
   if (!resp.ok) {
-    const err = new Error(
-      (data?.message || String(data || resp.statusText))
-    );
-    err.code = data?.code;
+    const errMsg = data?.message || String(data || resp.statusText);
+    const diag = `POSTGREST ${resp.status} ${method} ${table} → ${errMsg}`;
+    console.error('[pg] ✗', diag, '\n  full:', fullUrl, '\n  body:', JSON.stringify(data).slice(0, 400));
+    const err = new Error(errMsg);
+    err.code = data?.code || `HTTP_${resp.status}`;
     err.details = data?.details;
     err.hint = data?.hint;
     err.status = resp.status;
+    err._fullUrl = fullUrl;
     throw err;
+  }
+
+  if (pgLog()) {
+    const len = Array.isArray(data) ? data.length : (data ? 'obj' : 'null');
+    console.log(`[pg] ✓ ${resp.status} ${table} → ${len} (${elapsed}ms)`);
   }
 
   return data;
@@ -190,6 +224,14 @@ export class CloudSync {
   }
 
   emit(status, detail = {}) {
+    // 存详细错误到 errorDetail，让 UI 能显示
+    if (status === 'error' || detail.message) {
+      this.errorDetail = detail.message || this.errorDetail;
+      if (detail.err) {
+        const e = detail.err;
+        this.errorDetail = `${this.errorDetail}${e.code ? ` (${e.code})` : ''}${e.status ? ` [HTTP ${e.status}]` : ''}${e._fullUrl ? ` — ${e._fullUrl}` : ''}`;
+      }
+    }
     this.onStatus(status, { ...this.getStatus(), ...detail });
   }
 
@@ -228,11 +270,11 @@ export class CloudSync {
     }
     try {
       await this.ensureApp();
-      // 连上了 Publishable Key 就是 anon 角色 —— 不需要额外登录
       this.connected = true;
       await this.afterConnect({ auto: this.autoSync, silent: true });
     } catch (err) {
-      this.emit('need-login', { message: this.friendlyError(err) });
+      console.warn('[cloudSync] init 自动连接失败（用户需手动点连接）:', err?.message || err);
+      this.emit('need-login', { message: this.friendlyError(err), err });
     }
   }
 
@@ -251,9 +293,10 @@ export class CloudSync {
         '连接 PostgreSQL 超时，请检查网络或安全域名配置。'
       );
     } catch (err) {
+      console.error('[cloudSync] connect FAILED:', err);
       const message = this.friendlyError(err);
       this.connected = false;
-      this.emit('error', { message });
+      this.emit('error', { message, err });
       throw new Error(message);
     }
     await this.afterConnect({ auto: this.autoSync });
@@ -277,9 +320,10 @@ export class CloudSync {
       if (!silent) this.onToast('云开发 PostgreSQL 已连接', `匿名设备 · ${this.deviceId.slice(0, 8)}`, 'ok');
       if (this.autoSync) this.syncAllAttachments({ silent: true });
     } catch (err) {
+      console.error('[cloudSync] afterConnect FAILED:', err);
       const message = this.friendlyError(err);
       this.connected = false;
-      this.emit('error', { message });
+      this.emit('error', { message, err });
       throw new Error(message);
     }
   }
@@ -527,7 +571,7 @@ export class CloudSync {
             prefer: 'resolution=merge-duplicates',
           }),
           20000, '上传附件元数据超时'
-        );
+        ).catch((e) => console.warn('[cloudSync] attachments upsert 失败（不阻塞任务）:', e.message));
       }
 
       // --- 3. upsert 所有 processed events ---
@@ -584,8 +628,10 @@ export class CloudSync {
       }
       return true;
     } catch (err) {
-      this.emit('error', { message: this.friendlyError(err) });
-      if (!silent) this.onToast('云端上传失败', this.friendlyError(err));
+      console.error('[cloudSync] pushNow FAILED:', err);
+      const friendlyMsg = this.friendlyError(err);
+      this.emit('error', { message: friendlyMsg, err });
+      if (!silent) this.onToast('云端上传失败', friendlyMsg);
       return false;
     } finally {
       this.syncing = false;
