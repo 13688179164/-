@@ -336,14 +336,23 @@ export class CloudSync {
       this.emit('disabled');
       return;
     }
-    try {
-      await this.ensureApp();
-      this.connected = true;
-      await this.afterConnect({ auto: this.autoSync, silent: true });
-    } catch (err) {
-      console.warn('[cloudSync] init 自动连接失败（用户需手动点连接）:', err?.message || err);
-      this.emit('need-login', { message: this.friendlyError(err), err });
-    }
+    // 🔧 保存 init Promise，让 schedulePush 能等
+    this._initPromise = (async () => {
+      try {
+        await this.ensureApp();
+        this.connected = true;
+        await this.afterConnect({ auto: this.autoSync, silent: true });
+        // 🔧 init 完成后，如果之前标记了 dirty，立刻推
+        if (this.dirty) {
+          console.log('[cloudSync] init 完成，补推之前的 dirty 数据');
+          await this.pushNow({ force: true, silent: true });
+        }
+      } catch (err) {
+        console.warn('[cloudSync] init 自动连接失败（用户需手动点连接）:', err?.message || err);
+        this.emit('need-login', { message: this.friendlyError(err), err });
+      }
+    })();
+    return this._initPromise;
   }
 
   async connect({ envId, autoSync } = {}) {
@@ -627,20 +636,35 @@ export class CloudSync {
     this.localVersion++;
     this.dirty = true;
     this.localChangedAt = nowIso();
-    if (this.connected && this.autoSync) this.schedulePush();
+    // 🔧 不管当前是否 connected，都 schedulePush
+    // 如果还没连，pushNow 内部会自动等 connected 后执行
+    if (this.autoSync) this.schedulePush();
   }
 
   schedulePush() {
     clearTimeout(this.pushTimer);
     this.pushTimer = setTimeout(() => {
-      this.pushNow({ silent: true });
+      // 🔧 如果还没连，先等 init 完成再推
+      if (!this.connected && this._initPromise) {
+        this._initPromise.then(() => this.pushNow({ silent: true }));
+      } else {
+        this.pushNow({ silent: true });
+      }
     }, PUSH_DEBOUNCE_MS);
   }
 
   // ========== 上传（本地 → PG）==========
 
   async pushNow({ force = false, silent = false } = {}) {
-    if (!this.connected) return false;
+    // 🔧 如果还没连但 init 在跑，等它
+    if (!this.connected && this._initPromise) {
+      console.log('[cloudSync] pushNow: 等待 init 完成...');
+      await this._initPromise;
+    }
+    if (!this.connected) {
+      console.log('[cloudSync] pushNow: 仍然未连接，跳过');
+      return false;
+    }
     if (this.syncing) { return false; }
     if (!force && !this.dirty) return true;
     this.syncing = true;
