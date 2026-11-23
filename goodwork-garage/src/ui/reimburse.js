@@ -1,0 +1,2162 @@
+/**
+ * GOODWORK 古德車房 · 二级报销工作台
+ * 三列看板 / 本地持久化 / 附件凭证 / D 盘文件夹授权写入 / Excel 与统计报告
+ */
+import {
+  DEPARTMENTS, DEPT_CATEGORIES, STATUS_LIST, STATUS_MAP,
+  EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
+  createSampleTasks,
+} from '../core/reimburseConfig.js';
+
+/* ------------------------------------------------------------------ */
+/* 基础工具                                                            */
+/* ------------------------------------------------------------------ */
+
+const TASKS_KEY = 'goodwork.reimburse.tasks.v3';
+const SETTINGS_KEY = 'goodwork.reimburse.settings.v3';
+const DB_NAME = 'goodwork-reimburse';
+const DB_VERSION = 1;
+const VOUCHER_FOLDER = '车房凭证';
+
+const STATUS_ORDER = { pending: 0, reimbursed: 1, supplemented: 2 };
+const STATUS_LABEL = Object.fromEntries(STATUS_LIST.map((s) => [s.id, s.label]));
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+function esc(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function toDateKey(d = new Date()) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function dateKeyOf(value) {
+  if (!value) return toDateKey();
+  const s = String(value);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? toDateKey() : toDateKey(d);
+}
+function parseLocalDate(key) {
+  const [y, m, d] = String(key).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+function addDays(key, delta) {
+  const d = parseLocalDate(key);
+  d.setDate(d.getDate() + delta);
+  return toDateKey(d);
+}
+function formatDateTime(value) {
+  if (!value) return '—';
+  return String(value).replace('T', ' ').slice(0, 16);
+}
+function localTimestamp(date = new Date()) {
+  return `${toDateKey(date)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+function formatDateLabel(key) {
+  const d = parseLocalDate(key);
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+}
+function money(n) {
+  const num = Number(n) || 0;
+  return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function compactMoney(n) {
+  const num = Number(n) || 0;
+  return num.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+}
+function monthStartKey(d = new Date()) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`;
+}
+function weekStartKey(d = new Date()) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = x.getDay() || 7;
+  x.setDate(x.getDate() - day + 1);
+  return toDateKey(x);
+}
+function nowTimeValue() {
+  const d = new Date();
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function uid(prefix = 'GW') {
+  if (crypto?.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+function sanitizeNamePart(value) {
+  return String(value ?? '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40) || '未命名';
+}
+function fileExtension(name = '') {
+  const m = String(name).match(/(\.[A-Za-z0-9]{1,10})$/);
+  return m ? m[1].toLowerCase() : '';
+}
+function isImageFile(file) {
+  return file?.type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file?.name || '');
+}
+function isAllowedFile(file) {
+  const name = String(file?.name || '');
+  const type = String(file?.type || '');
+  if (type.startsWith('image/')) return true;
+  if (/\.(png|jpe?g|webp|gif|bmp|svg|pdf|docx?|xlsx?|txt|csv)$/i.test(name)) return true;
+  return false;
+}
+function formatBytes(bytes) {
+  const b = Number(bytes) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+function startOfDay(key) { return parseLocalDate(key); }
+function inRange(task, start, end) {
+  const key = dateKeyOf(task.appliedAt);
+  return key >= start && key <= end;
+}
+
+/* ------------------------------------------------------------------ */
+/* SVG icons                                                           */
+/* ------------------------------------------------------------------ */
+
+const ICON = {
+  close: '<svg viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none"><path d="M19 12H6M11 6l-5.5 6 5.5 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 20l4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M13.6 7.6l3 3" stroke="currentColor" stroke-width="1.3"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none"><path d="M5 7h14M9 7V4.5h6V7M7.5 7l.8 12h7.4l.8-12M10 11v4.5M14 11v4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  grip: '<svg viewBox="0 0 20 20" fill="currentColor"><circle cx="6" cy="5" r="1.1"/><circle cx="14" cy="5" r="1.1"/><circle cx="6" cy="10" r="1.1"/><circle cx="14" cy="10" r="1.1"/><circle cx="6" cy="15" r="1.1"/><circle cx="14" cy="15" r="1.1"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none"><path d="M3.5 7.5h6l1.8 2H20.5v9.8H3.5V7.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M3.5 7.5V5.7h5.2l1.5 1.8" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+  sync: '<svg viewBox="0 0 24 24" fill="none"><path d="M19 8.5A7.5 7.5 0 0 0 5.7 6.8L4 8.5M4 4.5v4h4M5 15.5a7.5 7.5 0 0 0 13.3 1.7L20 15.5M20 19.5v-4h-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none"><path d="M6 3.5h8l4 4V20.5H6V3.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M14 3.5v4h4M9 12h6M9 15h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="5.5" width="17" height="13" rx="1.4" stroke="currentColor" stroke-width="1.3"/><circle cx="9" cy="10" r="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M5 17l4.5-4.2L13 16l2.2-2.1L19.5 18" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  paperclip: '<svg viewBox="0 0 24 24" fill="none"><path d="M8.5 12.5l5.4-5.4a2.8 2.8 0 0 1 4 4l-7.1 7.1a4.6 4.6 0 0 1-6.5-6.5l6.7-6.7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  invoice: '<svg viewBox="0 0 24 24" fill="none"><path d="M5 3.5h14v17l-2.3-1.5-2.3 1.5-2.4-1.5-2.3 1.5L7.3 19 5 20.5v-17z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M8.5 8h7M8.5 11.5h7M8.5 15h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  report: '<svg viewBox="0 0 24 24" fill="none"><path d="M5 19.5V10M12 19.5V4.5M19 19.5v-6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M3.5 19.5h17" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+  excel: '<svg viewBox="0 0 24 24" fill="none"><path d="M5 3.5h14v17H5v-17z" stroke="currentColor" stroke-width="1.3"/><path d="M8 8l5 8M13 8l-5 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  check: '<svg viewBox="0 0 16 16" fill="none"><path d="M3 8.4l3.2 3.2L13 4.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  chevronLeft: '<svg viewBox="0 0 24 24" fill="none"><path d="M14.5 6l-6 6 6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  chevronRight: '<svg viewBox="0 0 24 24" fill="none"><path d="M9.5 6l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  drop: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 4v10M8 10.5l4 4 4-4M6 19h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+
+/* ------------------------------------------------------------------ */
+/* IndexedDB                                                           */
+/* ------------------------------------------------------------------ */
+
+let dbPromise = null;
+function openDb() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    if (!('indexedDB' in window)) { reject(new Error('IndexedDB 不可用')); return; }
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('attachments')) db.createObjectStore('attachments', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('IndexedDB 打开失败'));
+  });
+  return dbPromise;
+}
+async function dbPut(storeName, value) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).put(value);
+    tx.oncomplete = () => resolve(value);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function dbGet(storeName, key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const req = tx.objectStore(storeName).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function dbDelete(storeName, key) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    tx.objectStore(storeName).delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function storeAttachmentBlob(id, file) {
+  return dbPut('attachments', {
+    id,
+    name: file.name,
+    type: file.type || 'application/octet-stream',
+    size: file.size || 0,
+    blob: file,
+    savedAt: new Date().toISOString(),
+  });
+}
+async function readAttachmentBlob(id) {
+  const rec = await dbGet('attachments', id);
+  return rec?.blob || null;
+}
+async function deleteAttachmentBlob(id) {
+  try { await dbDelete('attachments', id); } catch { /* noop */ }
+}
+
+/* ------------------------------------------------------------------ */
+/* 主类                                                                */
+/* ------------------------------------------------------------------ */
+
+export class ReimburseBoard {
+  constructor({ onClose, onToast } = {}) {
+    this.onClose = onClose || (() => {});
+    this.onToast = onToast || (() => {});
+    this.tasks = this.loadTasks();
+    this.settings = this.loadSettings();
+    this.viewDate = toDateKey();
+    this.exportStart = this.settings.exportStart || monthStartKey();
+    this.exportEnd = this.settings.exportEnd || toDateKey();
+    this.openFlag = false;
+    this.closing = false;
+    this.drawerOpen = false;
+    this.drawerMode = null;
+    this.editingId = null;
+    this.draft = null;
+    this.draftExisting = [];
+    this.draftNewFiles = [];
+    this.draftRemoved = new Set();
+    this.draftLoading = false;
+    this.drag = null;
+    this.suppressClick = false;
+    this.reportOpen = false;
+    this.previewUrl = null;
+    this.folderHandle = null;
+    this.folderStatus = 'checking';
+    this.folderBusy = false;
+    this.exporting = false;
+    this.syncing = false;
+    this.lastPct = 0;
+    this._buildShell();
+    this._bind();
+    this.renderAll({ animate: false });
+    this.initFolder();
+  }
+
+  /* ---------------- 存储 ---------------- */
+
+  loadTasks() {
+    try {
+      const raw = localStorage.getItem(TASKS_KEY);
+      if (raw === null) {
+        const samples = createSampleTasks();
+        localStorage.setItem(TASKS_KEY, JSON.stringify(samples));
+        return samples;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error('tasks not array');
+      return parsed.map((t) => this.normalizeTask(t));
+    } catch (err) {
+      console.warn('报销数据读取失败，使用示例数据', err);
+      const samples = createSampleTasks();
+      try { localStorage.setItem(TASKS_KEY, JSON.stringify(samples)); } catch { /* noop */ }
+      return samples;
+    }
+  }
+
+  normalizeTask(t) {
+    return {
+      id: t.id || uid('GW-RB'),
+      applicant: String(t.applicant || ''),
+      amount: Number(t.amount) || 0,
+      department: DEPARTMENTS.includes(t.department) ? t.department : '其他',
+      category: t.category || categoriesFor(t.department)[0],
+      appliedAt: t.appliedAt || `${toDateKey()}T${nowTimeValue()}`,
+      hasInvoice: !!t.hasInvoice,
+      content: String(t.content || ''),
+      status: STATUS_MAP[t.status] ? t.status : 'pending',
+      highValuePart: !!t.highValuePart,
+      crossMonth: t.highValuePart ? !!t.crossMonth : null,
+      stockingCost: t.highValuePart ? !!t.stockingCost : null,
+      attachments: Array.isArray(t.attachments) ? t.attachments.map((a) => ({
+        id: a.id || uid('att'),
+        name: a.name || '附件',
+        size: Number(a.size) || 0,
+        type: a.type || '',
+        written: !!a.written,
+        voucherName: a.voucherName || '',
+      })) : [],
+      order: Number.isFinite(Number(t.order)) ? Number(t.order) : Date.now(),
+      createdAt: t.createdAt || new Date().toISOString(),
+      updatedAt: t.updatedAt || new Date().toISOString(),
+    };
+  }
+
+  loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  }
+
+  persistTasks() {
+    try {
+      localStorage.setItem(TASKS_KEY, JSON.stringify(this.tasks));
+      return true;
+    } catch (err) {
+      console.warn('保存报销数据失败', err);
+      this.toast('本地保存失败', '浏览器存储空间不足，请先导出或删除部分记录。');
+      return false;
+    }
+  }
+
+  persistSettings() {
+    try {
+      this.settings.exportStart = this.exportStart;
+      this.settings.exportEnd = this.exportEnd;
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
+    } catch { /* noop */ }
+  }
+
+  toast(title, desc = '', type = '') {
+    this.onToast(title, desc, type);
+  }
+
+  /* ---------------- DOM ---------------- */
+
+  _buildShell() {
+    const statusColumns = STATUS_LIST.map((s) => `
+      <section class="rb-col rb-col--${s.id}" data-status="${s.id}" aria-label="${s.label}">
+        <header class="rb-col-head">
+          <div class="rb-col-title">
+            <i class="rb-col-dot"></i>
+            <h3>${s.label}</h3>
+            <span class="rb-col-en">${s.en}</span>
+          </div>
+          <div class="rb-col-meta">
+            <span class="rb-col-count" data-count="${s.id}">0</span>
+            <b class="rb-col-sum" data-sum="${s.id}">¥0.00</b>
+          </div>
+          <p class="rb-col-hint">${s.hint}</p>
+        </header>
+        <div class="rb-col-scroll">
+          <div class="rb-cards" data-cards="${s.id}"></div>
+          <div class="rb-empty" data-empty="${s.id}">
+            <span>${s.id === 'pending' ? '今天还没有待报销申请' : s.id === 'reimbursed' ? '还没有已报销记录' : '还没有补充附件的记录'}</span>
+            ${s.id === 'pending' ? '<button type="button" class="rb-empty-btn" data-rb="new">新建第一笔 ' + ICON.plus + '</button>' : '<small>可将卡片拖拽至此列</small>'}
+          </div>
+        </div>
+      </section>
+    `).join('');
+
+    const shell = document.createElement('div');
+    shell.className = 'rboard';
+    shell.id = 'reimburseBoard';
+    shell.setAttribute('aria-hidden', 'true');
+    shell.innerHTML = `
+      <div class="rb-shell">
+        <header class="rb-top">
+          <div class="rb-brand">
+            <div class="rb-mark">G</div>
+            <div class="rb-brand-copy">
+              <div class="rb-brand-name">GOODWORK <span>古德車房</span></div>
+              <div class="rb-brand-sub">FINANCE OS · REIMBURSEMENT WORKSPACE</div>
+            </div>
+          </div>
+          <div class="rb-day-nav">
+            <button type="button" class="rb-icon-btn" data-rb="prev-day" aria-label="前一天">${ICON.chevronLeft}</button>
+            <label class="rb-day-field">
+              <span id="rbDayKicker">今天 / TODAY</span>
+              <input type="date" id="rbViewDate" aria-label="选择报销日期" />
+            </label>
+            <button type="button" class="rb-icon-btn" data-rb="next-day" aria-label="后一天">${ICON.chevronRight}</button>
+            <button type="button" class="rb-today-btn" data-rb="today">回到今天</button>
+          </div>
+          <div class="rb-top-actions">
+            <button type="button" class="rb-new-btn" data-rb="new">${ICON.plus}<span>新增报销</span></button>
+            <button type="button" class="rb-back-btn" data-rb="close">${ICON.back}<span>返回场景</span></button>
+          </div>
+        </header>
+
+        <section class="rb-hero">
+          <div class="rb-hero-main">
+            <div class="rb-eyebrow"><i></i><span>今日未完成报销 / UNFINISHED</span></div>
+            <div class="rb-pct-wrap">
+              <span class="rb-pct" id="rbPct">0.0</span><em class="rb-pct-sign">%</em>
+            </div>
+            <div class="rb-pct-label">未完成报销 <span>待报销金额 / 当日总金额</span></div>
+            <div class="rb-mini-row">
+              <span><b id="rbHeroCount">0</b> 笔申请</span>
+              <span><b id="rbHeroInvoice">0%</b> 有发票</span>
+              <span><b id="rbHeroHigh">0</b> 笔高额配件</span>
+              <span><b id="rbHeroFiles">0</b> 个附件</span>
+            </div>
+          </div>
+
+          <div class="rb-hero-progress">
+            <div class="rb-progress-head">
+              <span>今日报销构成</span>
+              <b id="rbHeroTotal">¥0.00</b>
+            </div>
+            <div class="rb-progress" id="rbProgress" aria-label="今日报销金额分段进度">
+              <i class="rb-seg rb-seg--pending" data-seg="pending"></i>
+              <i class="rb-seg rb-seg--reimbursed" data-seg="reimbursed"></i>
+              <i class="rb-seg rb-seg--supplemented" data-seg="supplemented"></i>
+            </div>
+            <div class="rb-legend" id="rbLegend"></div>
+            <div class="rb-progress-foot">
+              <span>卡片可在三列间拖拽流转</span>
+              <span>数据自动保存于本机</span>
+            </div>
+          </div>
+
+          <div class="rb-export-card">
+            <div class="rb-export-head">
+              <span class="rb-export-kicker">EXPORT / 导出</span>
+              <span class="rb-export-range-hint" id="rbExportHint">0 笔 · ¥0.00</span>
+            </div>
+            <div class="rb-range">
+              <input type="date" id="rbExportStart" aria-label="导出开始日期" />
+              <span>至</span>
+              <input type="date" id="rbExportEnd" aria-label="导出结束日期" />
+            </div>
+            <div class="rb-presets">
+              <button type="button" data-preset="today">今天</button>
+              <button type="button" data-preset="week">本周</button>
+              <button type="button" data-preset="month">本月</button>
+              <button type="button" data-preset="all">全部</button>
+            </div>
+            <div class="rb-export-actions">
+              <button type="button" class="rb-btn ghost" data-rb="report">${ICON.report}<span>统计报告</span></button>
+              <button type="button" class="rb-btn primary" data-rb="export">${ICON.excel}<span>导出 Excel</span></button>
+            </div>
+            <div class="rb-folder-row">
+              <div class="rb-folder-info">
+                <span class="rb-folder-icon">${ICON.folder}</span>
+                <div>
+                  <b>D:\\${VOUCHER_FOLDER}</b>
+                  <span id="rbFolderStatus">正在检查凭证文件夹…</span>
+                </div>
+              </div>
+              <button type="button" class="rb-folder-btn" data-rb="folder">绑定</button>
+            </div>
+          </div>
+        </section>
+
+        <main class="rb-kanban" id="rbKanban">${statusColumns}</main>
+
+        <footer class="rb-bottom">
+          <div class="rb-total rb-total--pending">
+            <span>待报销总额</span>
+            <b id="rbTotalPending">¥0.00</b>
+            <small>PENDING</small>
+          </div>
+          <div class="rb-total rb-total--reimbursed">
+            <span>已报销总额</span>
+            <b id="rbTotalReimbursed">¥0.00</b>
+            <small>REIMBURSED</small>
+          </div>
+          <div class="rb-total rb-total--supplemented">
+            <span>已补充附件</span>
+            <b id="rbTotalSupplemented">¥0.00</b>
+            <small>SUPPLEMENTED</small>
+          </div>
+          <div class="rb-bottom-note">
+            <span class="rb-live-dot"></span>
+            本地自动保存 · 附件会同步至已授权的凭证文件夹
+          </div>
+        </footer>
+      </div>
+
+      <div class="rb-drawer-scrim" id="rbDrawerScrim"></div>
+      <aside class="rb-drawer" id="rbDrawer" aria-hidden="true">
+        <form class="rb-form" id="rbTaskForm" novalidate>
+          <header class="rb-drawer-head">
+            <div>
+              <span class="rb-export-kicker" id="rbDrawerKicker">NEW / 新建</span>
+              <h2 id="rbDrawerTitle">新增报销申请</h2>
+            </div>
+            <button type="button" class="rb-icon-btn" data-rb="drawer-close" aria-label="关闭">${ICON.close}</button>
+          </header>
+          <div class="rb-drawer-body" id="rbDrawerBody"></div>
+          <footer class="rb-drawer-foot" id="rbDrawerFoot">
+            <button type="button" class="rb-btn ghost" data-rb="drawer-close">取消</button>
+            <button type="submit" class="rb-btn primary" id="rbSaveBtn">保存报销</button>
+          </footer>
+        </form>
+      </aside>
+
+      <div class="rb-modal rb-report-modal" id="rbReportModal" aria-hidden="true">
+        <div class="rb-report-sheet">
+          <header class="rb-report-head">
+            <div>
+              <span class="rb-export-kicker">STATISTICS REPORT</span>
+              <h2>报销统计报告</h2>
+              <p id="rbReportRange"></p>
+            </div>
+            <div class="rb-report-head-actions">
+              <button type="button" class="rb-btn ghost" data-rb="report-export">${ICON.excel}<span>导出 Excel</span></button>
+              <button type="button" class="rb-icon-btn" data-rb="report-close" aria-label="关闭报告">${ICON.close}</button>
+            </div>
+          </header>
+          <div class="rb-report-body" id="rbReportBody"></div>
+        </div>
+      </div>
+
+      <div class="rb-modal rb-confirm-modal" id="rbConfirmModal" aria-hidden="true">
+        <div class="rb-confirm-card">
+          <span class="rb-confirm-icon">${ICON.trash}</span>
+          <h3>删除这条报销记录？</h3>
+          <p id="rbConfirmText"></p>
+          <div class="rb-confirm-actions">
+            <button type="button" class="rb-btn ghost" data-rb="confirm-cancel">取消</button>
+            <button type="button" class="rb-btn danger" data-rb="confirm-delete">确认删除</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="rb-modal rb-preview-modal" id="rbPreviewModal" aria-hidden="true">
+        <div class="rb-preview-card">
+          <button type="button" class="rb-icon-btn" data-rb="preview-close" aria-label="关闭预览">${ICON.close}</button>
+          <div class="rb-preview-content" id="rbPreviewContent"></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(shell);
+    this.root = shell;
+    this.el = {
+      shell: $('.rb-shell', shell),
+      viewDate: $('#rbViewDate', shell),
+      dayKicker: $('#rbDayKicker', shell),
+      pct: $('#rbPct', shell),
+      heroCount: $('#rbHeroCount', shell),
+      heroInvoice: $('#rbHeroInvoice', shell),
+      heroHigh: $('#rbHeroHigh', shell),
+      heroFiles: $('#rbHeroFiles', shell),
+      heroTotal: $('#rbHeroTotal', shell),
+      legend: $('#rbLegend', shell),
+      progress: $('#rbProgress', shell),
+      exportStart: $('#rbExportStart', shell),
+      exportEnd: $('#rbExportEnd', shell),
+      exportHint: $('#rbExportHint', shell),
+      folderStatus: $('#rbFolderStatus', shell),
+      folderBtn: $('.rb-folder-btn', shell),
+      totalPending: $('#rbTotalPending', shell),
+      totalReimbursed: $('#rbTotalReimbursed', shell),
+      totalSupplemented: $('#rbTotalSupplemented', shell),
+      drawer: $('#rbDrawer', shell),
+      drawerScrim: $('#rbDrawerScrim', shell),
+      drawerBody: $('#rbDrawerBody', shell),
+      drawerTitle: $('#rbDrawerTitle', shell),
+      drawerKicker: $('#rbDrawerKicker', shell),
+      form: $('#rbTaskForm', shell),
+      saveBtn: $('#rbSaveBtn', shell),
+      report: $('#rbReportModal', shell),
+      reportBody: $('#rbReportBody', shell),
+      reportRange: $('#rbReportRange', shell),
+      confirm: $('#rbConfirmModal', shell),
+      confirmText: $('#rbConfirmText', shell),
+      preview: $('#rbPreviewModal', shell),
+      previewContent: $('#rbPreviewContent', shell),
+    };
+    this.cardRects = new Map();
+  }
+
+  _bind() {
+    // 看板 / 导出 / 弹层通用动作
+    this.root.addEventListener('click', (e) => {
+      const actionEl = e.target.closest('[data-rb]');
+      if (actionEl) {
+        e.preventDefault();
+        this.handleAction(actionEl.dataset.rb, actionEl);
+        return;
+      }
+      const preset = e.target.closest('[data-preset]');
+      if (preset) {
+        e.preventDefault();
+        this.applyPreset(preset.dataset.preset);
+        return;
+      }
+      const removeAttach = e.target.closest('[data-remove-attach]');
+      if (removeAttach) {
+        e.preventDefault();
+        this.removeDraftAttachment(removeAttach.dataset.removeAttach, removeAttach.dataset.origin);
+        return;
+      }
+      const downloadAttach = e.target.closest('[data-download-attach]');
+      if (downloadAttach) {
+        e.preventDefault();
+        this.downloadAttachment(downloadAttach.dataset.downloadAttach);
+      }
+    });
+
+    this.el.viewDate.addEventListener('change', () => {
+      if (!this.el.viewDate.value) return;
+      this.viewDate = this.el.viewDate.value;
+      this.renderAll();
+    });
+
+    this.el.exportStart.addEventListener('change', () => {
+      this.exportStart = this.el.exportStart.value || monthStartKey();
+      this.persistSettings();
+      this.renderExportMeta();
+    });
+    this.el.exportEnd.addEventListener('change', () => {
+      this.exportEnd = this.el.exportEnd.value || toDateKey();
+      this.persistSettings();
+      this.renderExportMeta();
+    });
+
+    this.el.drawerScrim.addEventListener('click', () => this.closeDrawer());
+
+    // 表单字段
+    this.el.form.addEventListener('input', (e) => this.onFormInput(e));
+    this.el.form.addEventListener('change', (e) => this.onFormChange(e));
+    this.el.form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.saveDrawer();
+    });
+    this.el.form.addEventListener('click', (e) => {
+      const toggle = e.target.closest('[data-toggle-field]');
+      if (toggle) {
+        e.preventDefault();
+        this.setDraftToggle(toggle.dataset.toggleField, toggle.dataset.toggleValue === 'true');
+        return;
+      }
+      if (e.target.closest('[data-rb="add-files"]')) {
+        e.preventDefault();
+        $('#rbFileInput', this.el.form)?.click();
+        return;
+      }
+      if (e.target.closest('[data-rb="drawer-close"]')) {
+        e.preventDefault();
+        this.closeDrawer();
+      }
+    });
+    this.el.form.addEventListener('change', (e) => {
+      if (e.target.id === 'rbFileInput') {
+        this.addFiles(e.target.files);
+        e.target.value = '';
+      }
+    });
+    const drop = this.el.drawerBody;
+    drop.addEventListener('dragover', (e) => {
+      if (!e.target.closest('.rb-drop')) return;
+      e.preventDefault();
+      e.target.closest('.rb-drop')?.classList.add('is-dragover');
+    });
+    drop.addEventListener('dragleave', (e) => {
+      e.target.closest('.rb-drop')?.classList.remove('is-dragover');
+    });
+    drop.addEventListener('drop', (e) => {
+      const zone = e.target.closest('.rb-drop');
+      if (!zone) return;
+      e.preventDefault();
+      zone.classList.remove('is-dragover');
+      if (e.dataTransfer?.files?.length) this.addFiles(e.dataTransfer.files);
+    });
+
+    // 卡片拖拽
+    this.root.addEventListener('pointerdown', (e) => this.onCardPointerDown(e));
+    document.addEventListener('keydown', (e) => {
+      if (!this.openFlag) return;
+      if (e.key !== 'Escape') return;
+      if ($('#rbPreviewModal', this.root).classList.contains('is-open')) { this.closePreview(); return; }
+      if (this.el.confirm.classList.contains('is-open')) { this.closeConfirm(); return; }
+      if (this.reportOpen) { this.closeReport(); return; }
+      if (this.drawerOpen) { this.closeDrawer(); return; }
+      this.close();
+    });
+  }
+
+  /* ---------------- 打开 / 关闭 ---------------- */
+
+  open() {
+    if (this.openFlag) return;
+    this.openFlag = true;
+    this.closing = false;
+    this.viewDate = toDateKey();
+    this.lastPct = 0;
+    this.renderAll({ animate: false });
+    this.el.shell.scrollTop = 0;
+    this.root.classList.add('is-open');
+    this.root.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-reimburse');
+    requestAnimationFrame(() => {
+      this.root.classList.add('is-visible');
+      this.animatePercentage();
+    });
+  }
+
+  close() {
+    if (!this.openFlag || this.closing) return;
+    this.closing = true;
+    this.closeDrawer(true);
+    this.closeReport(true);
+    this.closeConfirm(true);
+    this.cancelDrag();
+    this.root.classList.remove('is-visible');
+    this.root.classList.add('is-closing');
+    setTimeout(() => {
+      this.root.classList.remove('is-open', 'is-closing');
+      this.root.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('is-reimburse');
+      this.openFlag = false;
+      this.closing = false;
+      this.onClose();
+    }, 420);
+  }
+
+  isOpen() { return this.openFlag; }
+
+  handleAction(action, el) {
+    switch (action) {
+      case 'close': this.close(); break;
+      case 'new': this.openDrawer(); break;
+      case 'prev-day':
+        this.viewDate = addDays(this.viewDate, -1);
+        this.renderAll();
+        break;
+      case 'next-day':
+        this.viewDate = addDays(this.viewDate, 1);
+        this.renderAll();
+        break;
+      case 'today':
+        this.viewDate = toDateKey();
+        this.renderAll();
+        break;
+      case 'edit-task': this.openDrawer(el.dataset.id); break;
+      case 'delete-task': this.openDeleteConfirm(el.dataset.id); break;
+      case 'drawer-close': this.closeDrawer(); break;
+      case 'report': this.openReport(); break;
+      case 'report-close': this.closeReport(); break;
+      case 'report-export': this.exportExcel(true); break;
+      case 'export': this.exportExcel(false); break;
+      case 'folder': this.folderAction(); break;
+      case 'confirm-cancel': this.closeConfirm(); break;
+      case 'confirm-delete': this.confirmDelete(); break;
+      case 'preview-close': this.closePreview(); break;
+      case 'remove-attach': break;
+      default: break;
+    }
+  }
+
+  /* ---------------- 渲染：整体 ---------------- */
+
+  dayTasks() {
+    return this.tasks.filter((t) => dateKeyOf(t.appliedAt) === this.viewDate);
+  }
+
+  tasksByStatus(status) {
+    return this.dayTasks()
+      .filter((t) => t.status === status)
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || String(a.createdAt).localeCompare(String(b.createdAt)));
+  }
+
+  captureCardRects() {
+    const map = new Map();
+    $$('.rb-card', this.root).forEach((card) => {
+      map.set(card.dataset.id, card.getBoundingClientRect());
+    });
+    return map;
+  }
+
+  renderAll({ animate = true, fromRects = null } = {}) {
+    const previous = fromRects || (animate ? this.captureCardRects() : new Map());
+    this.el.viewDate.value = this.viewDate;
+    this.el.dayKicker.textContent = this.viewDate === toDateKey() ? '今天 / TODAY' : '历史日报 / ARCHIVE';
+    this.renderCards(previous);
+    this.renderStats();
+    this.renderExportMeta();
+    this.renderFolderStatus();
+    if (animate) this.animateNewCards();
+  }
+
+  renderCards(previousRects = new Map()) {
+    for (const status of STATUS_LIST) {
+      const list = $(`[data-cards="${status.id}"]`, this.root);
+      const empty = $(`[data-empty="${status.id}"]`, this.root);
+      const tasks = this.tasksByStatus(status.id);
+      $(`[data-count="${status.id}"]`, this.root).textContent = String(tasks.length);
+      $(`[data-sum="${status.id}"]`, this.root).textContent = `¥${money(tasks.reduce((s, t) => s + t.amount, 0))}`;
+      list.innerHTML = tasks.map((t) => this.cardHtml(t)).join('');
+      empty.classList.toggle('is-visible', tasks.length === 0);
+    }
+    // FLIP 布局动画
+    if (previousRects.size) {
+      requestAnimationFrame(() => {
+        $$('.rb-card', this.root).forEach((card) => {
+          const before = previousRects.get(card.dataset.id);
+          if (!before) return;
+          const after = card.getBoundingClientRect();
+          const dx = before.left - after.left;
+          const dy = before.top - after.top;
+          if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+            card.animate(
+              [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0,0)' }],
+              { duration: 340, easing: 'cubic-bezier(.22,1,.36,1)' }
+            );
+          }
+        });
+      });
+    }
+  }
+
+  renderStats() {
+    const tasks = this.dayTasks();
+    const count = tasks.length;
+    const sum = (arr) => arr.reduce((s, t) => s + t.amount, 0);
+    const pending = tasks.filter((t) => t.status === 'pending');
+    const reimbursed = tasks.filter((t) => t.status === 'reimbursed');
+    const supplemented = tasks.filter((t) => t.status === 'supplemented');
+    const totalAmount = sum(tasks);
+    const pendingAmount = sum(pending);
+    const reimbursedAmount = sum(reimbursed);
+    const supplementAmount = sum(supplemented);
+    const pct = totalAmount > 0 ? (pendingAmount / totalAmount) * 100 : 0;
+    this.lastPct = pct;
+    this.el.pct.textContent = pct.toFixed(1);
+    this.el.heroCount.textContent = String(count);
+    const invoiceCount = tasks.filter((t) => t.hasInvoice).length;
+    this.el.heroInvoice.textContent = count ? `${Math.round(invoiceCount / count * 100)}%` : '0%';
+    this.el.heroHigh.textContent = String(tasks.filter((t) => t.highValuePart).length);
+    this.el.heroFiles.textContent = String(tasks.reduce((s, t) => s + t.attachments.length, 0));
+    this.el.heroTotal.textContent = `¥${money(totalAmount)}`;
+    this.el.legend.innerHTML = STATUS_LIST.map((s) => {
+      const arr = tasks.filter((t) => t.status === s.id);
+      return `<span class="rb-legend-item"><i class="rb-legend-dot rb-legend-dot--${s.id}"></i><b>${s.label}</b><em>${arr.length} 笔</em><strong>¥${money(sum(arr))}</strong></span>`;
+    }).join('');
+    const segAmounts = { pending: pendingAmount, reimbursed: reimbursedAmount, supplemented: supplementAmount };
+    STATUS_LIST.forEach((s) => {
+      const seg = $(`[data-seg="${s.id}"]`, this.root);
+      if (!seg) return;
+      const value = segAmounts[s.id];
+      seg.style.flexGrow = String(value > 0 ? value : 0);
+      seg.style.minWidth = value > 0 ? '3px' : '0';
+      seg.classList.toggle('is-zero', value <= 0);
+    });
+    this.el.totalPending.textContent = `¥${money(pendingAmount)}`;
+    this.el.totalReimbursed.textContent = `¥${money(reimbursedAmount)}`;
+    this.el.totalSupplemented.textContent = `¥${money(supplementAmount)}`;
+    this.animatePercentage();
+  }
+
+  animatePercentage() {
+    const target = Number(this.lastPct) || 0;
+    const start = Number(this.el.pct.textContent) || 0;
+    if (Math.abs(target - start) < 0.05) {
+      this.el.pct.textContent = target.toFixed(1);
+      return;
+    }
+    const t0 = performance.now();
+    const dur = 520;
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / dur);
+      const eased = 1 - Math.pow(1 - k, 3);
+      this.el.pct.textContent = (start + (target - start) * eased).toFixed(1);
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  animateNewCards() {
+    $$('.rb-card', this.root).forEach((card) => {
+      if (!card.dataset.justRendered) {
+        card.dataset.justRendered = '1';
+        card.animate(
+          [{ opacity: 0, transform: 'translateY(10px) scale(.985)' }, { opacity: 1, transform: 'none' }],
+          { duration: 300, easing: 'cubic-bezier(.22,1,.36,1)' }
+        );
+      }
+    });
+  }
+
+  cardHtml(task) {
+    const status = STATUS_MAP[task.status];
+    const files = task.attachments.length;
+    const high = task.highValuePart;
+    const invoice = task.hasInvoice;
+    const cleanContent = esc(task.content).slice(0, 150);
+    return `
+      <article class="rb-card rb-card--${task.status}" data-id="${esc(task.id)}" data-card-id="${esc(task.id)}" tabindex="0" aria-label="${esc(task.applicant)} ${esc(task.department)} ${money(task.amount)}">
+        <div class="rb-card-glow"></div>
+        <header class="rb-card-top">
+          <div class="rb-card-person">
+            <span class="rb-avatar">${esc(task.applicant.slice(0, 1) || '?')}</span>
+            <div>
+              <b>${esc(task.applicant || '未填写')}</b>
+              <span>${esc(task.department)} · ${esc(task.category)}</span>
+            </div>
+          </div>
+          <div class="rb-card-amount">¥${money(task.amount)}</div>
+          <button type="button" class="rb-drag-handle" data-drag-handle aria-label="拖拽排序">${ICON.grip}</button>
+        </header>
+        <p class="rb-card-content">${cleanContent || '未填写报销内容'}</p>
+        <div class="rb-card-badges">
+          <span class="rb-badge ${invoice ? 'rb-badge--ok' : 'rb-badge--warn'}">${invoice ? '有发票' : '无发票'}</span>
+          ${high ? `<span class="rb-badge rb-badge--high">高额配件成本属性</span>` : ''}
+          ${files ? `<span class="rb-badge rb-badge--file">${ICON.paperclip}<span>附件 ${files}</span></span>` : ''}
+        </div>
+        ${high ? `<div class="rb-high-note">跨月：${task.crossMonth ? '是' : '否'} · 备货成本：${task.stockingCost ? '是' : '否'}</div>` : ''}
+        <footer class="rb-card-foot">
+          <span class="rb-card-time">${ICON.invoice}<span>${formatDateTime(task.appliedAt)}</span></span>
+          <div class="rb-card-actions">
+            <button type="button" class="rb-card-action" data-rb="edit-task" data-id="${esc(task.id)}" aria-label="编辑此报销">${ICON.edit}</button>
+            <button type="button" class="rb-card-action danger" data-rb="delete-task" data-id="${esc(task.id)}" aria-label="删除此报销">${ICON.trash}</button>
+          </div>
+        </footer>
+      </article>
+    `;
+  }
+
+  /* ---------------- 导出时间范围 ---------------- */
+
+  renderExportMeta() {
+    this.el.exportStart.value = this.exportStart;
+    this.el.exportEnd.value = this.exportEnd;
+    const tasks = this.tasks.filter((t) => inRange(t, this.exportStart, this.exportEnd));
+    const total = tasks.reduce((s, t) => s + t.amount, 0);
+    this.el.exportHint.textContent = `${tasks.length} 笔 · ¥${money(total)}`;
+    $$('.rb-presets [data-preset]', this.root).forEach((b) => b.classList.remove('is-active'));
+    const today = toDateKey();
+    if (this.exportStart === today && this.exportEnd === today) $('[data-preset="today"]', this.root)?.classList.add('is-active');
+    else if (this.exportStart === weekStartKey() && this.exportEnd === today) $('[data-preset="week"]', this.root)?.classList.add('is-active');
+    else if (this.exportStart === monthStartKey() && this.exportEnd === today) $('[data-preset="month"]', this.root)?.classList.add('is-active');
+    const allDates = this.tasks.map((t) => dateKeyOf(t.appliedAt)).sort();
+    if (allDates.length && this.exportStart === allDates[0] && this.exportEnd === allDates[allDates.length - 1]) {
+      $('[data-preset="all"]', this.root)?.classList.add('is-active');
+    }
+  }
+
+  applyPreset(preset) {
+    const today = toDateKey();
+    if (preset === 'today') {
+      this.exportStart = today;
+      this.exportEnd = today;
+    } else if (preset === 'week') {
+      this.exportStart = weekStartKey();
+      this.exportEnd = today;
+    } else if (preset === 'month') {
+      this.exportStart = monthStartKey();
+      this.exportEnd = today;
+    } else if (preset === 'all') {
+      const dates = this.tasks.map((t) => dateKeyOf(t.appliedAt)).sort();
+      this.exportStart = dates[0] || today;
+      this.exportEnd = dates[dates.length - 1] || today;
+    }
+    this.persistSettings();
+    this.renderExportMeta();
+  }
+
+  ensureValidRange() {
+    if (!this.exportStart || !this.exportEnd) {
+      this.toast('请选择完整的时间范围', '导出与统计需要开始日期和结束日期。');
+      return false;
+    }
+    if (this.exportStart > this.exportEnd) {
+      this.toast('时间范围不正确', '开始日期不能晚于结束日期。');
+      return false;
+    }
+    return true;
+  }
+
+  rangeTasks() {
+    return this.tasks
+      .filter((t) => inRange(t, this.exportStart, this.exportEnd))
+      .sort((a, b) => String(a.appliedAt).localeCompare(String(b.appliedAt)));
+  }
+
+  /* ---------------- 新增 / 编辑表单 ---------------- */
+
+  openDrawer(taskId = null) {
+    const editing = !!taskId;
+    this.drawerMode = editing ? 'edit' : 'create';
+    this.editingId = editing ? taskId : null;
+    this.draftRemoved = new Set();
+    this.revokeDraftPreviews();
+    this.draftNewFiles = [];
+    if (editing) {
+      const task = this.tasks.find((t) => t.id === taskId);
+      if (!task) return;
+      this.draft = JSON.parse(JSON.stringify(task));
+      this.draftExisting = this.draft.attachments.map((a) => ({ ...a }));
+      this.draft.attachments = [];
+    } else {
+      const now = new Date();
+      const time = nowTimeValue();
+      this.draft = {
+        id: uid('GW-RB'),
+        applicant: '',
+        amount: '',
+        department: DEPARTMENTS[0],
+        category: DEPT_CATEGORIES[DEPARTMENTS[0]][0],
+        appliedAt: `${this.viewDate}T${time}`,
+        hasInvoice: true,
+        content: '',
+        status: 'pending',
+        highValuePart: false,
+        crossMonth: null,
+        stockingCost: null,
+        attachments: [],
+      };
+      this.draftExisting = [];
+    }
+    this.drawerOpen = true;
+    this.el.drawerTitle.textContent = editing ? '编辑报销申请' : '新增报销申请';
+    this.el.drawerKicker.textContent = editing ? 'EDIT / 编辑' : 'NEW / 新建';
+    this.el.drawerBody.innerHTML = this.drawerHtml();
+    this.el.drawer.classList.add('is-open');
+    this.el.drawer.setAttribute('aria-hidden', 'false');
+    this.el.drawerScrim.classList.add('is-open');
+    document.body.classList.add('is-reimburse-drawer');
+    this.renderDrawerAttachments();
+    this.updateHighValueSection();
+    setTimeout(() => $('#rbApplicant', this.el.form)?.focus(), 260);
+  }
+
+  closeDrawer(immediate = false) {
+    if (!this.drawerOpen) return;
+    this.drawerOpen = false;
+    this.el.drawer.classList.remove('is-open');
+    this.el.drawer.setAttribute('aria-hidden', 'true');
+    this.el.drawerScrim.classList.remove('is-open');
+    document.body.classList.remove('is-reimburse-drawer');
+    this.revokeDraftPreviews();
+    this.draftNewFiles = [];
+    if (!immediate) this.draft = null;
+  }
+
+  drawerHtml() {
+    const d = this.draft;
+    const deptOptions = DEPARTMENTS.map((x) => `<option value="${esc(x)}" ${d.department === x ? 'selected' : ''}>${esc(x)}</option>`).join('');
+    const cats = categoriesFor(d.department);
+    if (!cats.includes(d.category)) d.category = cats[0];
+    const catOptions = cats.map((x) => `<option value="${esc(x)}" ${d.category === x ? 'selected' : ''}>${esc(x)}</option>`).join('');
+    const statusOptions = STATUS_LIST.map((s) => `<option value="${s.id}" ${d.status === s.id ? 'selected' : ''}>${s.label}</option>`).join('');
+    const employeeList = [...new Set([...EMPLOYEE_NAMES, ...this.tasks.map((t) => t.applicant)])].filter(Boolean);
+    return `
+      <div class="rb-form-grid">
+        <label class="rb-field">
+          <span>报销人员 <em>APPLICANT</em></span>
+          <input id="rbApplicant" name="applicant" value="${esc(d.applicant)}" placeholder="输入姓名" list="rbEmployeeList" autocomplete="off" />
+          <datalist id="rbEmployeeList">${employeeList.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+        </label>
+        <label class="rb-field">
+          <span>金额 <em>AMOUNT</em></span>
+          <div class="rb-amount-input"><i>¥</i><input id="rbAmount" name="amount" type="number" min="0" step="0.01" value="${d.amount === '' ? '' : Number(d.amount).toFixed(2)}" placeholder="0.00" /></div>
+        </label>
+        <label class="rb-field">
+          <span>部门 <em>DEPARTMENT</em></span>
+          <select id="rbDepartment" name="department">${deptOptions}</select>
+        </label>
+        <label class="rb-field">
+          <span>报销分类 <em>CATEGORY</em></span>
+          <select id="rbCategory" name="category">${catOptions}</select>
+        </label>
+        <label class="rb-field">
+          <span>申请时间 <em>APPLIED AT</em></span>
+          <input id="rbAppliedAt" name="appliedAt" type="datetime-local" value="${esc(String(d.appliedAt).slice(0, 16))}" />
+        </label>
+        <label class="rb-field">
+          <span>是否有发票 <em>INVOICE</em></span>
+          <div class="rb-toggle" role="group" aria-label="是否有发票">
+            <button type="button" class="${d.hasInvoice ? 'is-active' : ''}" data-toggle-field="hasInvoice" data-toggle-value="true">有发票</button>
+            <button type="button" class="${!d.hasInvoice ? 'is-active' : ''}" data-toggle-field="hasInvoice" data-toggle-value="false">无发票</button>
+          </div>
+        </label>
+      </div>
+
+      <div class="rb-section-label"><span>01</span><h4>报销内容 / DETAILS</h4></div>
+      <label class="rb-field">
+        <span>内容 <em>DESCRIPTION</em></span>
+        <textarea id="rbContent" name="content" rows="3" placeholder="填写费用发生事由、供应商或对应项目……">${esc(d.content)}</textarea>
+      </label>
+
+      <div class="rb-section-label"><span>02</span><h4>状态与高额配件属性 / FLAGS</h4></div>
+      <label class="rb-field">
+        <span>当前状态 <em>STATUS</em></span>
+        <select id="rbStatus" name="status">${statusOptions}</select>
+      </label>
+      <div class="rb-high-panel" id="rbHighPanel">
+        <div class="rb-high-head">
+          <div>
+            <span class="rb-high-kicker">HIGH-VALUE PART</span>
+            <h5>高额配件成本属性</h5>
+            <p>当报销分类为「配件」且金额 ≥ ¥3,000 时填写。</p>
+          </div>
+          <span class="rb-high-badge">自动识别</span>
+        </div>
+        <div class="rb-high-grid">
+          <div class="rb-toggle-group">
+            <span>是否跨月</span>
+            <div class="rb-toggle">
+              <button type="button" class="${d.crossMonth === true ? 'is-active' : ''}" data-toggle-field="crossMonth" data-toggle-value="true">是</button>
+              <button type="button" class="${d.crossMonth === false ? 'is-active' : ''}" data-toggle-field="crossMonth" data-toggle-value="false">否</button>
+            </div>
+          </div>
+          <div class="rb-toggle-group">
+            <span>备货成本</span>
+            <div class="rb-toggle">
+              <button type="button" class="${d.stockingCost === true ? 'is-active' : ''}" data-toggle-field="stockingCost" data-toggle-value="true">是</button>
+              <button type="button" class="${d.stockingCost === false ? 'is-active' : ''}" data-toggle-field="stockingCost" data-toggle-value="false">否</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rb-section-label"><span>03</span><h4>附件 / VOUCHERS</h4></div>
+      <input type="file" id="rbFileInput" hidden multiple accept="${ATTACHMENT_ACCEPT}" />
+      <div class="rb-drop" data-rb="add-files" role="button" tabindex="0">
+        <span class="rb-drop-icon">${ICON.drop}</span>
+        <div><b>点击上传图片或文档</b><span>支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多选</span></div>
+        <em>${ICON.paperclip}</em>
+      </div>
+      <div class="rb-attachment-list" id="rbAttachList"></div>
+      <div class="rb-folder-note" id="rbFolderNote">附件会保存在本机；绑定 D:\\${VOUCHER_FOLDER} 后自动写入。</div>
+
+      <div class="rb-form-error" id="rbFormError"></div>
+    `;
+  }
+
+  onFormChange(e) {
+    const t = e.target;
+    if (t.id === 'rbDepartment') {
+      this.draft.department = t.value;
+      const cats = categoriesFor(t.value);
+      this.draft.category = cats[0];
+      const cat = $('#rbCategory', this.el.form);
+      if (cat) cat.innerHTML = cats.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+      this.updateHighValueSection();
+    } else if (t.id === 'rbCategory') {
+      this.draft.category = t.value;
+      this.updateHighValueSection();
+    } else if (t.id === 'rbStatus') {
+      this.draft.status = t.value;
+    }
+  }
+
+  onFormInput(e) {
+    const t = e.target;
+    if (t.id === 'rbApplicant') this.draft.applicant = t.value;
+    else if (t.id === 'rbAmount') {
+      this.draft.amount = t.value;
+      this.updateHighValueSection();
+    } else if (t.id === 'rbAppliedAt') this.draft.appliedAt = t.value;
+    else if (t.id === 'rbContent') this.draft.content = t.value;
+  }
+
+  setDraftToggle(field, value) {
+    if (!this.draft) return;
+    if (field === 'hasInvoice') this.draft.hasInvoice = value;
+    else if (field === 'crossMonth') this.draft.crossMonth = value;
+    else if (field === 'stockingCost') this.draft.stockingCost = value;
+    $$(`[data-toggle-field="${field}"]`, this.el.form).forEach((btn) => {
+      btn.classList.toggle('is-active', String(btn.dataset.toggleValue) === String(value));
+    });
+    if (field === 'crossMonth' || field === 'stockingCost') this.updateHighValueSection();
+  }
+
+  isDraftHighValue() {
+    return isHighValuePart(this.draft?.category, this.draft?.amount);
+  }
+
+  updateHighValueSection() {
+    const panel = $('#rbHighPanel', this.el.form);
+    if (!panel) return;
+    const active = this.isDraftHighValue();
+    panel.classList.toggle('is-active', active);
+    panel.classList.toggle('is-inactive', !active);
+    if (!active) {
+      this.draft.highValuePart = false;
+      this.draft.crossMonth = null;
+      this.draft.stockingCost = null;
+      $$('[data-toggle-field="crossMonth"], [data-toggle-field="stockingCost"]', panel).forEach((btn) => btn.classList.remove('is-active'));
+    } else {
+      this.draft.highValuePart = true;
+    }
+  }
+
+  addFiles(fileList) {
+    if (!fileList?.length) return;
+    const files = [...fileList];
+    let added = 0;
+    for (const file of files) {
+      if (!isAllowedFile(file)) {
+        this.toast('不支持的文件类型', `${file.name} 不是支持的图片或文档格式。`);
+        continue;
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        this.toast('文件过大', `${file.name} 超过 50 MB，请压缩后再上传。`);
+        continue;
+      }
+      this.draftNewFiles.push({
+        tempId: uid('rb-file'),
+        file,
+        preview: isImageFile(file) ? URL.createObjectURL(file) : '',
+      });
+      added++;
+    }
+    if (added) this.renderDrawerAttachments();
+  }
+
+  renderDrawerAttachments() {
+    const list = $('#rbAttachList', this.el.form);
+    if (!list) return;
+    const existing = this.draftExisting.filter((a) => !this.draftRemoved.has(a.id));
+    const rows = [
+      ...existing.map((a) => `
+        <div class="rb-attach-row" data-existing-id="${esc(a.id)}">
+          <span class="rb-attach-icon">${isImageFile({ name: a.name, type: a.type }) ? ICON.image : ICON.file}</span>
+          <div class="rb-attach-copy"><b>${esc(a.name)}</b><span>${formatBytes(a.size)} · ${a.written ? '已写入凭证文件夹' : '本地暂存'}</span></div>
+          <button type="button" class="rb-attach-download" data-download-attach="${esc(a.id)}" aria-label="下载附件">${ICON.download}</button>
+          <button type="button" class="rb-attach-remove" data-remove-attach="${esc(a.id)}" data-origin="existing" aria-label="移除附件">${ICON.close}</button>
+        </div>
+      `),
+      ...this.draftNewFiles.map((f) => `
+        <div class="rb-attach-row" data-new-id="${esc(f.tempId)}">
+          <span class="rb-attach-icon">${f.preview ? `<img src="${f.preview}" alt="" />` : (isImageFile(f.file) ? ICON.image : ICON.file)}</span>
+          <div class="rb-attach-copy"><b>${esc(f.file.name)}</b><span>${formatBytes(f.file.size)} · 待保存</span></div>
+          <button type="button" class="rb-attach-remove" data-remove-attach="${esc(f.tempId)}" data-origin="new" aria-label="移除附件">${ICON.close}</button>
+        </div>
+      `),
+    ];
+    list.innerHTML = rows.length ? rows.join('') : '<div class="rb-attach-empty">尚未添加附件</div>';
+    const note = $('#rbFolderNote', this.el.form);
+    if (note) {
+      note.innerHTML = this.folderStatus === 'connected'
+        ? '已连接凭证文件夹：保存时会自动写入 D:\\' + VOUCHER_FOLDER + '。'
+        : '附件会保存在本机；绑定 D:\\' + VOUCHER_FOLDER + ' 后自动写入。';
+    }
+  }
+
+  removeDraftAttachment(id, origin) {
+    if (origin === 'existing') {
+      this.draftRemoved.add(id);
+      this.draftExisting = this.draftExisting.filter((a) => a.id !== id);
+    } else {
+      const idx = this.draftNewFiles.findIndex((f) => f.tempId === id);
+      if (idx >= 0) {
+        if (this.draftNewFiles[idx].preview) URL.revokeObjectURL(this.draftNewFiles[idx].preview);
+        this.draftNewFiles.splice(idx, 1);
+      }
+    }
+    this.renderDrawerAttachments();
+  }
+
+  revokeDraftPreviews() {
+    this.draftNewFiles?.forEach((f) => { if (f.preview) URL.revokeObjectURL(f.preview); });
+  }
+
+  async saveDrawer() {
+    if (this.draftLoading) return;
+    const d = this.draft;
+    const err = $('#rbFormError', this.el.form);
+    const fail = (msg) => {
+      if (err) {
+        err.textContent = msg;
+        err.classList.add('is-on');
+        err.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      this.el.form.querySelector('.rb-form-error')?.focus?.();
+    };
+    if (err) err.classList.remove('is-on');
+    const applicant = String(d.applicant || '').trim();
+    const amount = Number(d.amount);
+    const content = String(d.content || '').trim();
+    if (!applicant) return fail('请填写报销人员。');
+    if (!Number.isFinite(amount) || amount <= 0) return fail('请输入大于 0 的报销金额。');
+    if (!d.department || !d.category) return fail('请选择部门和报销分类。');
+    if (!d.appliedAt) return fail('请选择申请时间。');
+    if (content.length < 2) return fail('请填写报销内容。');
+    if (this.isDraftHighValue() && (d.crossMonth === null || d.stockingCost === null)) {
+      return fail('高额配件需要选择是否跨月及备货成本。');
+    }
+    this.draftLoading = true;
+    this.el.saveBtn.disabled = true;
+    this.el.saveBtn.textContent = '保存中…';
+    try {
+      const now = new Date().toISOString();
+      const isEditing = this.drawerMode === 'edit';
+      const original = isEditing ? this.tasks.find((t) => t.id === this.editingId) : null;
+      const highValue = this.isDraftHighValue();
+      const task = {
+        id: isEditing ? this.editingId : uid('GW-RB'),
+        applicant,
+        amount: Math.round(amount * 100) / 100,
+        department: d.department,
+        category: d.category,
+        appliedAt: d.appliedAt,
+        hasInvoice: !!d.hasInvoice,
+        content,
+        status: STATUS_MAP[d.status] ? d.status : 'pending',
+        highValuePart: highValue,
+        crossMonth: highValue ? !!d.crossMonth : null,
+        stockingCost: highValue ? !!d.stockingCost : null,
+        attachments: [],
+        order: original ? original.order : this.nextOrder(d.status),
+        createdAt: original?.createdAt || now,
+        updatedAt: now,
+      };
+      const attachments = [];
+      for (const a of this.draftExisting.filter((x) => !this.draftRemoved.has(x.id))) {
+        attachments.push({ ...a });
+      }
+      for (const f of this.draftNewFiles) {
+        const attachId = uid('att');
+        await storeAttachmentBlob(attachId, f.file);
+        const meta = {
+          id: attachId,
+          name: f.file.name,
+          size: f.file.size,
+          type: f.file.type || '',
+          written: false,
+          voucherName: '',
+        };
+        attachments.push(meta);
+      }
+      task.attachments = attachments;
+      let writeFailures = 0;
+      if (this.folderStatus === 'connected') {
+        for (let i = 0; i < task.attachments.length; i++) {
+          const meta = task.attachments[i];
+          if (meta.written) continue;
+          const blob = await readAttachmentBlob(meta.id);
+          if (!blob) continue;
+          try {
+            const fileName = await this.writeVoucherFile(task, blob, meta.name, i);
+            meta.written = true;
+            meta.voucherName = fileName;
+          } catch (writeErr) {
+            writeFailures++;
+            console.warn('凭证写入失败', writeErr);
+          }
+        }
+      }
+      // 删除被移除的附件缓存
+      for (const id of this.draftRemoved) await deleteAttachmentBlob(id);
+      if (isEditing) {
+        const idx = this.tasks.findIndex((t) => t.id === this.editingId);
+        if (idx >= 0) this.tasks[idx] = task;
+        else this.tasks.push(task);
+      } else {
+        this.tasks.unshift(task);
+      }
+      this.persistTasks();
+      this.viewDate = dateKeyOf(task.appliedAt);
+      this.closeDrawer(true);
+      this.renderAll();
+      this.cardRects = new Map();
+      const localOnly = task.attachments.length > 0 && this.folderStatus !== 'connected';
+      this.toast(
+        isEditing ? '报销申请已更新' : '报销申请已创建',
+        localOnly
+          ? '附件已本地暂存；绑定凭证文件夹后可自动写入 D 盘。'
+          : writeFailures
+            ? `${applicant} · ¥${money(task.amount)}，${writeFailures} 个附件写入 D 盘失败，已保留本地缓存。`
+            : `${applicant} · ¥${money(task.amount)} · ${STATUS_LABEL[task.status]}`,
+        'ok'
+      );
+    } catch (err2) {
+      console.error(err2);
+      this.toast('保存失败', err2?.message || '浏览器本地存储不可用。');
+    } finally {
+      this.draftLoading = false;
+      this.el.saveBtn.disabled = false;
+      this.el.saveBtn.textContent = '保存报销';
+    }
+  }
+
+  nextOrder(status) {
+    const same = this.tasks.filter((t) => t.status === status);
+    if (!same.length) return Date.now();
+    return Math.min(...same.map((t) => t.order)) - 10;
+  }
+
+  /* ---------------- 删除 ---------------- */
+
+  openDeleteConfirm(id) {
+    const task = this.tasks.find((t) => t.id === id);
+    if (!task) return;
+    this.confirmId = id;
+    this.el.confirmText.innerHTML = `将删除 <b>${esc(task.applicant)}</b> · ${esc(task.department)} · <b>¥${money(task.amount)}</b> 的本地记录。已写入 D 盘凭证文件夹的文件不会被自动删除。`;
+    this.el.confirm.classList.add('is-open');
+    this.el.confirm.setAttribute('aria-hidden', 'false');
+  }
+
+  closeConfirm(immediate = false) {
+    this.el.confirm.classList.remove('is-open');
+    this.el.confirm.setAttribute('aria-hidden', 'true');
+    if (!immediate) this.confirmId = null;
+  }
+
+  async confirmDelete() {
+    const id = this.confirmId;
+    if (!id) return;
+    const before = this.captureCardRects();
+    const task = this.tasks.find((t) => t.id === id);
+    if (task) {
+      for (const a of task.attachments) await deleteAttachmentBlob(a.id);
+      this.tasks = this.tasks.filter((t) => t.id !== id);
+      this.persistTasks();
+    }
+    this.closeConfirm(true);
+    this.renderAll({ fromRects: before });
+    this.toast('报销记录已删除', '本地记录与附件缓存已移除。');
+  }
+
+  /* ---------------- 拖拽 ---------------- */
+
+  onCardPointerDown(e) {
+    if (!this.openFlag || this.drawerOpen || this.reportOpen) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (e.target.closest('button, a, input, textarea, select, .rb-drag-handle')) {
+      if (!e.target.closest('.rb-drag-handle')) return;
+    } else if (e.pointerType !== 'mouse') {
+      return;
+    }
+    const card = e.target.closest('.rb-card');
+    if (!card) return;
+    const id = card.dataset.id;
+    const task = this.tasks.find((t) => t.id === id);
+    if (!task) return;
+    const rect = card.getBoundingClientRect();
+    const drag = {
+      id,
+      card,
+      startX: e.clientX,
+      startY: e.clientY,
+      offsetX: e.clientX - rect.left,
+      offsetY: e.clientY - rect.top,
+      width: rect.width,
+      height: rect.height,
+      moved: false,
+      ghost: null,
+      targetStatus: task.status,
+      targetIndex: -1,
+      pointerId: e.pointerId,
+      beforeTask: task,
+    };
+    this.drag = drag;
+    const move = (ev) => this.onCardPointerMove(ev);
+    const up = (ev) => this.onCardPointerUp(ev);
+    drag.moveHandler = move;
+    drag.upHandler = up;
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  }
+
+  onCardPointerMove(e) {
+    const d = this.drag;
+    if (!d) return;
+    if (!d.moved) {
+      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 4) return;
+      d.moved = true;
+      this.suppressClick = true;
+      d.card.classList.add('is-source');
+      this.startGhost(d, e);
+      document.body.classList.add('is-reimburse-drag');
+    }
+    if (!d.moved) return;
+    e.preventDefault();
+    d.ghost.style.left = `${e.clientX - d.offsetX}px`;
+    d.ghost.style.top = `${e.clientY - d.offsetY}px`;
+    const col = this.columnAtPoint(e.clientX, e.clientY);
+    $$('.rb-col', this.root).forEach((c) => c.classList.toggle('is-drop-target', c === col));
+    if (!col) {
+      d.targetStatus = d.beforeTask.status;
+      d.targetIndex = -1;
+      this.clearDropMarks();
+      return;
+    }
+    d.targetStatus = col.dataset.status;
+    const cardsWrap = $('.rb-cards', col);
+    const cards = $$('.rb-card', cardsWrap).filter((c) => c !== d.card);
+    let index = cards.length;
+    for (let i = 0; i < cards.length; i++) {
+      const r = cards[i].getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) { index = i; break; }
+    }
+    d.targetIndex = index;
+    this.clearDropMarks();
+    if (cards[index]) cards[index].classList.add('drop-before');
+    else if (cards[index - 1]) cards[index - 1].classList.add('drop-after');
+    else cardsWrap.classList.add('drop-empty');
+    // 滚动边缘
+    const scroll = $('.rb-col-scroll', col);
+    const sr = scroll.getBoundingClientRect();
+    if (e.clientY < sr.top + 48) scroll.scrollTop -= 8;
+    else if (e.clientY > sr.bottom - 48) scroll.scrollTop += 8;
+  }
+
+  startGhost(d, e) {
+    const ghost = d.card.cloneNode(true);
+    ghost.classList.add('rb-ghost');
+    ghost.removeAttribute('tabindex');
+    ghost.style.width = `${d.width}px`;
+    ghost.style.height = `${d.height}px`;
+    ghost.style.left = `${e.clientX - d.offsetX}px`;
+    ghost.style.top = `${e.clientY - d.offsetY}px`;
+    ghost.style.transform = 'rotate(1.4deg) scale(1.015)';
+    document.body.appendChild(ghost);
+    d.ghost = ghost;
+    d.card.style.opacity = '0.22';
+  }
+
+  columnAtPoint(x, y) {
+    const cols = $$('.rb-col', this.root);
+    for (const c of cols) {
+      const r = c.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top - 40 && y <= r.bottom) return c;
+    }
+    // 横向最近列
+    let best = null;
+    let bestDist = Infinity;
+    for (const c of cols) {
+      const r = c.getBoundingClientRect();
+      if (y < r.top || y > r.bottom) continue;
+      const dist = Math.abs((r.left + r.right) / 2 - x);
+      if (dist < bestDist) { best = c; bestDist = dist; }
+    }
+    return best;
+  }
+
+  clearDropMarks() {
+    $$('.rb-card.drop-before, .rb-card.drop-after', this.root).forEach((c) => c.classList.remove('drop-before', 'drop-after'));
+    $$('.rb-cards.drop-empty', this.root).forEach((c) => c.classList.remove('drop-empty'));
+  }
+
+  onCardPointerUp() {
+    const d = this.drag;
+    if (!d) return;
+    const moved = d.moved;
+    const task = this.tasks.find((t) => t.id === d.id);
+    const targetStatus = d.targetStatus;
+    const targetIndex = d.targetIndex;
+    this.cleanupDrag();
+    if (!moved || !task || targetIndex < 0 || !STATUS_MAP[targetStatus]) return;
+    const before = this.captureCardRects();
+    const targetList = this.tasksByStatus(targetStatus).filter((t) => t.id !== task.id);
+    const insertAt = targetIndex >= 0 ? Math.min(targetIndex, targetList.length) : targetList.length;
+    const prev = targetList[insertAt - 1];
+    const next = targetList[insertAt];
+    let newOrder;
+    if (prev && next) newOrder = (prev.order + next.order) / 2;
+    else if (prev) newOrder = prev.order + 10;
+    else if (next) newOrder = next.order - 10;
+    else newOrder = this.nextOrder(targetStatus);
+    const statusChanged = task.status !== targetStatus;
+    task.status = targetStatus;
+    task.order = newOrder;
+    task.updatedAt = new Date().toISOString();
+    this.persistTasks();
+    this.renderAll({ fromRects: before });
+    if (statusChanged) {
+      this.toast('状态已更新', `${task.applicant} · ¥${money(task.amount)} → ${STATUS_LABEL[targetStatus]}`, 'ok');
+    }
+  }
+
+  cleanupDrag() {
+    const d = this.drag;
+    if (!d) return;
+    this.drag = null;
+    d.ghost?.remove();
+    d.card?.classList.remove('is-source');
+    if (d.card) d.card.style.opacity = '';
+    window.removeEventListener('pointermove', d.moveHandler);
+    window.removeEventListener('pointerup', d.upHandler);
+    window.removeEventListener('pointercancel', d.upHandler);
+    document.body.classList.remove('is-reimburse-drag');
+    $$('.rb-col.is-drop-target', this.root).forEach((c) => c.classList.remove('is-drop-target'));
+    this.clearDropMarks();
+    setTimeout(() => { this.suppressClick = false; }, 0);
+  }
+
+  cancelDrag() {
+    if (!this.drag) return;
+    this.cleanupDrag();
+  }
+
+  /* ---------------- 附件下载 ---------------- */
+
+  async downloadAttachment(id) {
+    const rec = await readAttachmentBlob(id);
+    if (!rec) { this.toast('附件不存在', '本地缓存中未找到该文件。'); return; }
+    const url = URL.createObjectURL(rec);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = rec.name || '附件';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  /* ---------------- D 盘凭证文件夹 ---------------- */
+
+  async initFolder() {
+    this.folderSupported = typeof window.showDirectoryPicker === 'function';
+    if (!this.folderSupported) {
+      this.folderStatus = 'unsupported';
+      this.renderFolderStatus();
+      return;
+    }
+    try {
+      const rec = await dbGet('meta', 'voucherDir');
+      if (rec?.value) {
+        this.folderHandle = rec.value;
+        const perm = await this.queryPermission(this.folderHandle);
+        this.folderStatus = perm === 'granted' ? 'connected' : perm === 'prompt' ? 'prompt' : 'denied';
+      } else {
+        this.folderStatus = 'unbound';
+      }
+    } catch (err) {
+      console.warn('凭证文件夹读取失败', err);
+      this.folderStatus = 'unbound';
+    }
+    this.renderFolderStatus();
+  }
+
+  async queryPermission(handle) {
+    if (!handle?.queryPermission) return 'granted';
+    try { return await handle.queryPermission({ mode: 'readwrite' }); } catch { return 'denied'; }
+  }
+
+  async ensureFolderPermission(interactive = false) {
+    if (!this.folderHandle) return false;
+    let perm = await this.queryPermission(this.folderHandle);
+    if (perm === 'prompt' && interactive && this.folderHandle.requestPermission) {
+      try { perm = await this.folderHandle.requestPermission({ mode: 'readwrite' }); } catch { perm = 'denied'; }
+    }
+    if (perm === 'granted') { this.folderStatus = 'connected'; this.renderFolderStatus(); return true; }
+    this.folderStatus = perm === 'prompt' ? 'prompt' : 'denied';
+    this.renderFolderStatus();
+    return false;
+  }
+
+  async folderAction() {
+    if (this.folderBusy) return;
+    if (this.folderStatus === 'connected') {
+      await this.syncAllAttachments(false);
+      return;
+    }
+    if (this.folderStatus === 'prompt') {
+      this.folderBusy = true;
+      this.renderFolderStatus();
+      const ok = await this.ensureFolderPermission(true);
+      this.folderBusy = false;
+      this.renderFolderStatus();
+      if (ok) await this.syncAllAttachments(false);
+      else this.toast('文件夹授权未恢复', '请重新绑定 D:\\' + VOUCHER_FOLDER + '。');
+      return;
+    }
+    if (this.folderStatus === 'unsupported') {
+      this.toast('当前浏览器无法直写文件夹', '附件仍保存在本机，可在编辑中单独下载。建议使用 Chrome / Edge。');
+      return;
+    }
+    await this.bindVoucherFolder();
+  }
+
+  async bindVoucherFolder() {
+    if (this.folderBusy) return;
+    if (this.folderStatus === 'unsupported') {
+      this.toast('当前浏览器不支持文件夹直写', '请使用 Chrome / Edge，或单独下载附件。');
+      return;
+    }
+    this.folderBusy = true;
+    this.renderFolderStatus();
+    try {
+      const picked = await window.showDirectoryPicker({ id: 'goodwork-voucher', mode: 'readwrite' });
+      let target = picked;
+      if (picked.name !== VOUCHER_FOLDER) {
+        target = await picked.getDirectoryHandle(VOUCHER_FOLDER, { create: true });
+      }
+      let perm = await this.queryPermission(target);
+      if (perm !== 'granted' && target.requestPermission) perm = await target.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') throw new Error('未获得文件夹写入权限');
+      this.folderHandle = target;
+      this.folderStatus = 'connected';
+      await dbPut('meta', { key: 'voucherDir', value: target, name: target.name });
+      this.toast('凭证文件夹已连接', '附件保存时会自动写入「车房凭证」文件夹。', 'ok');
+      this.renderFolderStatus();
+      await this.syncAllAttachments(false);
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        this.folderStatus = this.folderHandle ? 'connected' : 'unbound';
+      } else {
+        console.warn('绑定凭证文件夹失败', err);
+        this.folderStatus = this.folderHandle ? 'prompt' : 'unbound';
+        this.toast('文件夹绑定失败', err?.message || '请在浏览器弹窗中选择 D 盘或车房凭证文件夹。');
+      }
+      this.renderFolderStatus();
+    } finally {
+      this.folderBusy = false;
+      this.renderFolderStatus();
+    }
+  }
+
+  async syncAllAttachments(silent = false) {
+    if (this.syncing) return;
+    if (!this.folderHandle) return;
+    const ok = await this.ensureFolderPermission(true);
+    if (!ok) { this.toast('需要文件夹写入权限', '请点击「恢复授权」后重试。'); return; }
+    this.syncing = true;
+    this.folderBusy = true;
+    this.renderFolderStatus();
+    let count = 0;
+    let failed = 0;
+    try {
+      for (const task of this.tasks) {
+        for (let i = 0; i < task.attachments.length; i++) {
+          const meta = task.attachments[i];
+          if (meta.written) continue;
+          const blob = await readAttachmentBlob(meta.id);
+          if (!blob) continue;
+          try {
+            const fileName = await this.writeVoucherFile(task, blob, meta.name, i);
+            meta.written = true;
+            meta.voucherName = fileName;
+            count++;
+          } catch (err) {
+            failed++;
+            console.warn('凭证写入失败', task.id, meta.name, err);
+          }
+        }
+      }
+      if (count) this.persistTasks();
+      this.renderAll({ animate: false });
+      if (!silent || count || failed) {
+        if (count) this.toast('附件已写入凭证文件夹', `成功写入 ${count} 个文件${failed ? `，${failed} 个失败` : ''}。`, 'ok');
+        else if (failed) this.toast('附件写入失败', '请检查文件夹权限后重试。');
+        else this.toast('没有需要同步的附件', '当前所有附件都已写入或尚未上传。');
+      }
+    } finally {
+      this.syncing = false;
+      this.folderBusy = false;
+      this.renderFolderStatus();
+    }
+  }
+
+  voucherFileName(task, originalName, index) {
+    const date = dateKeyOf(task.appliedAt);
+    const person = sanitizeNamePart(task.applicant);
+    const amount = money(task.amount).replace(/,/g, '');
+    const dept = sanitizeNamePart(task.department);
+    const ext = fileExtension(originalName);
+    const suffix = index > 0 ? `_${index + 1}` : '';
+    return `${date}_${person}_${amount}_${dept}${suffix}${ext}`;
+  }
+
+  async writeVoucherFile(task, blob, originalName, index) {
+    if (!this.folderHandle) throw new Error('未绑定凭证文件夹');
+    const fileName = this.voucherFileName(task, originalName, index);
+    const fh = await this.folderHandle.getFileHandle(fileName, { create: true });
+    const writable = await fh.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return fileName;
+  }
+
+  renderFolderStatus() {
+    if (!this.el.folderStatus || !this.el.folderBtn) return;
+    const map = {
+      checking: ['正在检查凭证文件夹…', '检查中', 'is-muted'],
+      unbound: ['未绑定 · 首次需授权', '绑定', ''],
+      connected: ['已连接 · 自动写入 D:\\' + VOUCHER_FOLDER, this.folderBusy ? '同步中…' : '同步', 'is-ok'],
+      prompt: ['写入授权已过期 · 请恢复', '恢复授权', 'is-warn'],
+      denied: ['没有写入授权', '重新绑定', 'is-warn'],
+      unsupported: ['当前浏览器不支持直写文件夹', '使用 Chrome / Edge', 'is-muted'],
+    };
+    const [text, btnText, cls] = map[this.folderStatus] || map.unbound;
+    this.el.folderStatus.textContent = text;
+    this.el.folderStatus.className = cls;
+    this.el.folderBtn.textContent = this.folderBusy ? '请稍候…' : btnText;
+    this.el.folderBtn.title = this.folderStatus === 'unbound'
+      ? '绑定 D:\\' + VOUCHER_FOLDER + '（首次需要手动授权一次）'
+      : this.folderStatus === 'connected'
+        ? '将尚未写入的附件同步到 D:\\' + VOUCHER_FOLDER
+        : btnText;
+    this.el.folderBtn.disabled = this.folderBusy || this.folderStatus === 'unsupported';
+    this.el.folderBtn.classList.toggle('is-ok', this.folderStatus === 'connected');
+    const note = $('#rbFolderNote', this.el.form);
+    if (note) {
+      note.innerHTML = this.folderStatus === 'connected'
+        ? '已连接「车房凭证」文件夹，保存时附件会自动写入 D 盘。'
+        : '附件会保存在本机；绑定 D:\\' + VOUCHER_FOLDER + ' 后自动写入。';
+    }
+  }
+
+  /* ---------------- 统计 ---------------- */
+
+  computeStats(tasks) {
+    const sum = (arr, fn = (t) => t.amount) => arr.reduce((s, t) => s + (Number(fn(t)) || 0), 0);
+    const statusCounts = Object.fromEntries(STATUS_LIST.map((s) => [s.id, tasks.filter((t) => t.status === s.id).length]));
+    const statusAmounts = Object.fromEntries(STATUS_LIST.map((s) => [s.id, sum(tasks.filter((t) => t.status === s.id))]));
+    const invoiceCount = tasks.filter((t) => t.hasInvoice).length;
+    const highValueTasks = tasks.filter((t) => t.highValuePart);
+    const fileCount = tasks.reduce((s, t) => s + (t.attachments?.length || 0), 0);
+    const deptMap = new Map();
+    for (const t of tasks) {
+      if (!deptMap.has(t.department)) deptMap.set(t.department, []);
+      deptMap.get(t.department).push(t);
+    }
+    const depts = DEPARTMENTS.filter((d) => deptMap.has(d)).map((department) => {
+      const arr = deptMap.get(department);
+      const catMap = new Map();
+      for (const t of arr) {
+        if (!catMap.has(t.category)) catMap.set(t.category, []);
+        catMap.get(t.category).push(t);
+      }
+      const categories = [...catMap.entries()].map(([category, list]) => ({
+        category,
+        count: list.length,
+        amount: sum(list),
+        pending: sum(list.filter((t) => t.status === 'pending')),
+        reimbursed: sum(list.filter((t) => t.status === 'reimbursed')),
+        supplemented: sum(list.filter((t) => t.status === 'supplemented')),
+        invoice: list.filter((t) => t.hasInvoice).length,
+        highValue: list.filter((t) => t.highValuePart).length,
+      })).sort((a, b) => b.amount - a.amount);
+      return {
+        department,
+        count: arr.length,
+        amount: sum(arr),
+        pending: sum(arr.filter((t) => t.status === 'pending')),
+        reimbursed: sum(arr.filter((t) => t.status === 'reimbursed')),
+        supplemented: sum(arr.filter((t) => t.status === 'supplemented')),
+        invoice: arr.filter((t) => t.hasInvoice).length,
+        highValue: arr.filter((t) => t.highValuePart).length,
+        files: arr.reduce((s, t) => s + (t.attachments?.length || 0), 0),
+        categories,
+      };
+    }).sort((a, b) => DEPARTMENTS.indexOf(a.department) - DEPARTMENTS.indexOf(b.department));
+    const empMap = new Map();
+    for (const t of tasks) {
+      if (!empMap.has(t.applicant)) empMap.set(t.applicant, []);
+      empMap.get(t.applicant).push(t);
+    }
+    const employees = [...empMap.entries()].map(([name, arr]) => ({
+      name,
+      count: arr.length,
+      amount: sum(arr),
+      pending: sum(arr.filter((t) => t.status === 'pending')),
+      reimbursed: sum(arr.filter((t) => t.status === 'reimbursed')),
+      supplemented: sum(arr.filter((t) => t.status === 'supplemented')),
+      noInvoice: arr.filter((t) => !t.hasInvoice).length,
+      highValue: arr.filter((t) => t.highValuePart).length,
+      files: arr.reduce((s, t) => s + (t.attachments?.length || 0), 0),
+    })).sort((a, b) => b.amount - a.amount);
+    return {
+      count: tasks.length,
+      amount: sum(tasks),
+      statusCounts,
+      statusAmounts,
+      invoiceCount,
+      invoiceRate: tasks.length ? invoiceCount / tasks.length : 0,
+      highValueCount: highValueTasks.length,
+      highValueAmount: sum(highValueTasks),
+      fileCount,
+      departments: depts,
+      employees,
+      tasks,
+    };
+  }
+
+  reportHtml(stats) {
+    if (!stats.count) {
+      return `<div class="rb-report-empty"><span>RANGE EMPTY</span><h3>该时间范围内没有报销记录</h3><p>调整顶部导出时间范围，或回到看板创建一个新的报销申请。</p></div>`;
+    }
+    const topDept = stats.departments.slice().sort((a, b) => b.amount - a.amount)[0];
+    const topEmployee = stats.employees[0];
+    const topCategory = stats.departments.flatMap((d) => d.categories.map((c) => ({ department: d.department, ...c }))).sort((a, b) => b.amount - a.amount)[0];
+    const deptRows = stats.departments.flatMap((d) => [
+      ...d.categories.map((c) => `
+        <tr>
+          <td class="rb-report-dept">${esc(d.department)}</td>
+          <td>${esc(c.category)}</td>
+          <td class="num">${c.count}</td>
+          <td class="num strong">¥${money(c.amount)}</td>
+          <td class="num">¥${money(c.pending)}</td>
+          <td class="num">¥${money(c.reimbursed)}</td>
+          <td class="num">¥${money(c.supplemented)}</td>
+          <td class="num">${c.invoice}</td>
+          <td class="num">${c.highValue}</td>
+        </tr>
+      `),
+      `<tr class="rb-report-subtotal">
+        <td class="rb-report-dept">${esc(d.department)} · 小计</td>
+        <td>全部分类</td>
+        <td class="num">${d.count}</td>
+        <td class="num strong">¥${money(d.amount)}</td>
+        <td class="num">¥${money(d.pending)}</td>
+        <td class="num">¥${money(d.reimbursed)}</td>
+        <td class="num">¥${money(d.supplemented)}</td>
+        <td class="num">${d.invoice}</td>
+        <td class="num">${d.highValue}</td>
+      </tr>`,
+    ]).join('');
+    const empRows = stats.employees.map((e) => `
+      <tr>
+        <td class="rb-report-dept">${esc(e.name)}</td>
+        <td class="num">${e.count}</td>
+        <td class="num strong">¥${money(e.amount)}</td>
+        <td class="num">¥${money(e.pending)}</td>
+        <td class="num">¥${money(e.reimbursed)}</td>
+        <td class="num">${e.noInvoice}</td>
+        <td class="num">${e.highValue}</td>
+      </tr>
+    `).join('');
+    const attachments = stats.tasks.flatMap((t) => (t.attachments || []).map((a) => ({
+      date: dateKeyOf(t.appliedAt), applicant: t.applicant, department: t.department,
+      amount: t.amount, name: a.name, size: a.size, written: a.written,
+    })));
+    const attachmentRows = attachments.length
+      ? attachments.map((a) => `
+        <tr>
+          <td>${esc(a.date)}</td><td>${esc(a.applicant)}</td><td>${esc(a.department)}</td>
+          <td class="num">¥${money(a.amount)}</td><td>${esc(a.name)}</td><td class="num">${formatBytes(a.size)}</td>
+          <td>${a.written ? '已写入 D 盘' : '本地暂存'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="7" class="rb-report-none">该范围内没有附件</td></tr>';
+    return `
+      <div class="rb-report-metrics">
+        <div class="rb-report-metric hero"><span>报销总额</span><b>¥${money(stats.amount)}</b><small>${stats.count} 笔申请</small></div>
+        <div class="rb-report-metric"><span>待报销</span><b>¥${money(stats.statusAmounts.pending)}</b><small>${stats.statusCounts.pending} 笔</small></div>
+        <div class="rb-report-metric"><span>已报销</span><b>¥${money(stats.statusAmounts.reimbursed)}</b><small>${stats.statusCounts.reimbursed} 笔</small></div>
+        <div class="rb-report-metric"><span>已补充附件</span><b>¥${money(stats.statusAmounts.supplemented)}</b><small>${stats.statusCounts.supplemented} 笔</small></div>
+        <div class="rb-report-metric"><span>有发票比例</span><b>${Math.round(stats.invoiceRate * 100)}%</b><small>${stats.invoiceCount} / ${stats.count}</small></div>
+        <div class="rb-report-metric"><span>高额配件成本</span><b>¥${money(stats.highValueAmount)}</b><small>${stats.highValueCount} 笔 · ${stats.fileCount} 个附件</small></div>
+      </div>
+      <div class="rb-report-highlights">
+        <div><span>金额最高部门</span><b>${esc(topDept?.department || '—')}</b><em>¥${money(topDept?.amount || 0)}</em></div>
+        <div><span>金额最高员工</span><b>${esc(topEmployee?.name || '—')}</b><em>¥${money(topEmployee?.amount || 0)}</em></div>
+        <div><span>金额最高分类</span><b>${esc(topCategory ? `${topCategory.department} / ${topCategory.category}` : '—')}</b><em>¥${money(topCategory?.amount || 0)}</em></div>
+      </div>
+      <section class="rb-report-section">
+        <div class="rb-report-section-head"><div><span>DEPARTMENT × CATEGORY</span><h3>部门 · 报销分类统计</h3></div><p>按部门拆分到每个报销分类，并附小计。</p></div>
+        <div class="rb-report-table-wrap">
+          <table class="rb-report-table">
+            <thead><tr><th>部门</th><th>报销分类</th><th>笔数</th><th>合计金额</th><th>待报销</th><th>已报销</th><th>已补充</th><th>有发票</th><th>高额配件</th></tr></thead>
+            <tbody>${deptRows}</tbody>
+          </table>
+        </div>
+      </section>
+      <section class="rb-report-section">
+        <div class="rb-report-section-head"><div><span>EMPLOYEE SUMMARY</span><h3>员工报销金额统计</h3></div><p>按申请人员汇总金额、状态与无发票笔数。</p></div>
+        <div class="rb-report-table-wrap">
+          <table class="rb-report-table">
+            <thead><tr><th>报销人员</th><th>笔数</th><th>合计金额</th><th>待报销</th><th>已报销</th><th>无发票</th><th>高额配件</th></tr></thead>
+            <tbody>${empRows}</tbody>
+          </table>
+        </div>
+      </section>
+      <section class="rb-report-section">
+        <div class="rb-report-section-head"><div><span>VOUCHER FILES</span><h3>附件与凭证清单</h3></div><p>导出 Excel 时附件名称会一并写入明细表。</p></div>
+        <div class="rb-report-table-wrap">
+          <table class="rb-report-table">
+            <thead><tr><th>日期</th><th>报销人员</th><th>部门</th><th>金额</th><th>附件</th><th>大小</th><th>写入状态</th></tr></thead>
+            <tbody>${attachmentRows}</tbody>
+          </table>
+        </div>
+      </section>
+      <div class="rb-report-foot">统计范围：${esc(this.exportStart)} 至 ${esc(this.exportEnd)} · 生成于 ${localTimestamp()} · GOODWORK FINANCE OS</div>
+    `;
+  }
+
+  openReport() {
+    if (!this.ensureValidRange()) return;
+    const stats = this.computeStats(this.rangeTasks());
+    this.el.reportRange.textContent = `${this.exportStart} 至 ${this.exportEnd} · ${stats.count} 笔 · ¥${money(stats.amount)}`;
+    this.el.reportBody.innerHTML = this.reportHtml(stats);
+    this.reportOpen = true;
+    this.el.report.classList.add('is-open');
+    this.el.report.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('is-reimburse-modal');
+  }
+
+  closeReport(immediate = false) {
+    this.reportOpen = false;
+    this.el.report.classList.remove('is-open');
+    this.el.report.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('is-reimburse-modal');
+  }
+
+  /* ---------------- Excel ---------------- */
+
+  async loadXLSX() {
+    if (window.XLSX) return window.XLSX;
+    const url = new URL('vendor/xlsx.full.min.js', document.baseURI).href;
+    await new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-goodwork-xlsx]');
+      if (existing) {
+        if (window.XLSX) resolve();
+        else existing.addEventListener('load', resolve, { once: true });
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = url;
+      script.dataset.goodworkXlsx = '1';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Excel 组件加载失败'));
+      document.head.appendChild(script);
+    });
+    if (!window.XLSX) throw new Error('Excel 组件未就绪');
+    return window.XLSX;
+  }
+
+  buildWorkbook(XLSX, stats, start, end) {
+    const wb = XLSX.utils.book_new();
+    const statusLabel = (s) => STATUS_LABEL[s] || s;
+    const attachmentsText = (t) => t.attachments?.map((a) => a.name).join('；') || '—';
+    const detail = [
+      ['部门', '报销分类', '时间', '申请人员', '内容', '报销状态', '报销金额', '是否有发票', '高额配件成本属性', '附件'],
+      ...stats.tasks.map((t) => [
+        t.department, t.category, formatDateTime(t.appliedAt), t.applicant, t.content,
+        statusLabel(t.status), t.amount, t.hasInvoice ? '是' : '否', highValueText(t), attachmentsText(t),
+      ]),
+    ];
+    const wsDetail = XLSX.utils.aoa_to_sheet(detail);
+    wsDetail['!cols'] = [
+      { wch: 12 }, { wch: 16 }, { wch: 18 }, { wch: 12 }, { wch: 42 },
+      { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 36 }, { wch: 32 },
+    ];
+    wsDetail['!autofilter'] = { ref: `A1:J${detail.length}` };
+    for (let r = 2; r <= detail.length; r++) {
+      const cell = wsDetail[`G${r}`];
+      if (cell) cell.z = '#,##0.00';
+    }
+    XLSX.utils.book_append_sheet(wb, wsDetail, '报销明细');
+
+    const deptRows = [[
+      '部门', '报销分类', '笔数', '合计金额', '待报销金额', '已报销金额', '已补充附件金额', '有发票笔数', '高额配件笔数',
+    ]];
+    for (const d of stats.departments) {
+      for (const c of d.categories) {
+        deptRows.push([d.department, c.category, c.count, c.amount, c.pending, c.reimbursed, c.supplemented, c.invoice, c.highValue]);
+      }
+      deptRows.push([d.department, '小计', d.count, d.amount, d.pending, d.reimbursed, d.supplemented, d.invoice, d.highValue]);
+    }
+    const wsDept = XLSX.utils.aoa_to_sheet(deptRows);
+    wsDept['!cols'] = [{ wch: 14 }, { wch: 18 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 14 }];
+    XLSX.utils.book_append_sheet(wb, wsDept, '部门分类统计');
+
+    const empRows = [['报销人员', '笔数', '合计金额', '待报销金额', '已报销金额', '已补充附件金额', '无发票笔数', '高额配件笔数', '附件数量']];
+    for (const e of stats.employees) {
+      empRows.push([e.name, e.count, e.amount, e.pending, e.reimbursed, e.supplemented, e.noInvoice, e.highValue, e.files]);
+    }
+    const wsEmp = XLSX.utils.aoa_to_sheet(empRows);
+    wsEmp['!cols'] = [{ wch: 14 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 12 }, { wch: 14 }, { wch: 10 }];
+    XLSX.utils.book_append_sheet(wb, wsEmp, '员工报销统计');
+
+    const overview = [
+      ['GOODWORK 古德車房 · 报销统计报告'],
+      ['统计范围', `${start} 至 ${end}`],
+      ['生成时间', localTimestamp()],
+      [],
+      ['总览指标', '数值'],
+      ['申请总笔数', stats.count],
+      ['报销总金额', stats.amount],
+      ['待报销金额', stats.statusAmounts.pending],
+      ['待报销笔数', stats.statusCounts.pending],
+      ['已报销金额', stats.statusAmounts.reimbursed],
+      ['已报销笔数', stats.statusCounts.reimbursed],
+      ['已补充附件金额', stats.statusAmounts.supplemented],
+      ['已补充附件笔数', stats.statusCounts.supplemented],
+      ['有发票笔数', stats.invoiceCount],
+      ['无发票笔数', stats.count - stats.invoiceCount],
+      ['有发票比例', `${(stats.invoiceRate * 100).toFixed(1)}%`],
+      ['高额配件笔数', stats.highValueCount],
+      ['高额配件金额', stats.highValueAmount],
+      ['附件总数', stats.fileCount],
+      [],
+      ['金额最高部门', stats.departments.slice().sort((a, b) => b.amount - a.amount)[0]?.department || '—'],
+      ['金额最高员工', stats.employees[0]?.name || '—'],
+      ['金额最高分类', (() => {
+        const all = stats.departments.flatMap((d) => d.categories.map((c) => ({ d: d.department, c })));
+        const top = all.sort((a, b) => b.c.amount - a.c.amount)[0];
+        return top ? `${top.d} / ${top.c.category}` : '—';
+      })()],
+    ];
+    const wsOverview = XLSX.utils.aoa_to_sheet(overview);
+    wsOverview['!cols'] = [{ wch: 22 }, { wch: 30 }];
+    XLSX.utils.book_append_sheet(wb, wsOverview, '总览报告');
+
+    const files = [['日期', '报销人员', '部门', '金额', '附件名称', '文件大小', '写入状态']];
+    for (const t of stats.tasks) {
+      for (const a of t.attachments || []) {
+        files.push([dateKeyOf(t.appliedAt), t.applicant, t.department, t.amount, a.name, a.size, a.written ? '已写入 D 盘' : '本地暂存']);
+      }
+    }
+    if (files.length === 1) files.push(['该范围内没有附件', '', '', '', '', '', '']);
+    const wsFiles = XLSX.utils.aoa_to_sheet(files);
+    wsFiles['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 35 }, { wch: 12 }, { wch: 14 }];
+    XLSX.utils.book_append_sheet(wb, wsFiles, '附件清单');
+
+    return wb;
+  }
+
+  async exportExcel(fromReport = false) {
+    if (this.exporting) return;
+    if (!this.ensureValidRange()) return;
+    const stats = this.computeStats(this.rangeTasks());
+    if (!stats.count) {
+      this.toast('没有可导出的数据', '请调整导出时间范围后再试。');
+      return;
+    }
+    this.exporting = true;
+    const btns = $$('[data-rb="export"], [data-rb="report-export"]', this.root);
+    btns.forEach((b) => { b.disabled = true; });
+    try {
+      const XLSX = await this.loadXLSX();
+      const wb = this.buildWorkbook(XLSX, stats, this.exportStart, this.exportEnd);
+      const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const fileName = `GOODWORK报销统计_${this.exportStart}_至_${this.exportEnd}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      if (this.folderStatus === 'connected' && await this.ensureFolderPermission(false)) {
+        try {
+          const fh = await this.folderHandle.getFileHandle(`报销统计_${this.exportStart}_至_${this.exportEnd}.xlsx`, { create: true });
+          const w = await fh.createWritable();
+          await w.write(blob);
+          await w.close();
+        } catch (err) {
+          console.warn('统计表写入 D 盘失败', err);
+        }
+      }
+      this.toast('Excel 已导出', `${stats.count} 笔 · 5 个工作表 · 含部门/分类与员工统计。`, 'ok');
+      if (fromReport) this.closeReport();
+    } catch (err) {
+      console.error(err);
+      this.toast('Excel 导出失败', err?.message || '请稍后重试。');
+    } finally {
+      this.exporting = false;
+      btns.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  /* ---------------- 预览 / 收尾 ---------------- */
+
+  closePreview() {
+    this.el.preview.classList.remove('is-open');
+    this.el.preview.setAttribute('aria-hidden', 'true');
+    this.el.previewContent.innerHTML = '';
+    if (this.previewUrl) { URL.revokeObjectURL(this.previewUrl); this.previewUrl = null; }
+  }
+}

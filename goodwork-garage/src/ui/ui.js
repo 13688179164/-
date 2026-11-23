@@ -120,10 +120,6 @@ export class UI {
         this.closePanel(true);
         return;
       }
-      if (action === 'archive') {
-        this.openArchive();
-        return;
-      }
       if (action === 'open-form') {
         this.closePanel(false);
         this.emit('cta');

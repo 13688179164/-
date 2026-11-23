@@ -23,6 +23,7 @@ import { InteractionSystem } from './systems/interaction.js';
 import { QuestSystem } from './systems/quest.js';
 import { AudioEngine } from './audio.js';
 import { UI } from './ui/ui.js';
+import { ReimburseBoard } from './ui/reimburse.js';
 
 const nextPaint = () => new Promise((resolve) => {
   requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -241,6 +242,11 @@ class GoodworkApp {
       onOpenGarage: () => this.enterGarageFlow(),
     });
 
+    this.reimburse = new ReimburseBoard({
+      onClose: () => this.exitGarageFocus(),
+      onToast: (title, desc, type) => this.ui.toast(title, desc, type),
+    });
+
     this.bindUI();
     this.bindEnvironment();
 
@@ -289,7 +295,10 @@ class GoodworkApp {
     ui.on('formSubmit', (record) => this.quest.onFormSubmit(record));
     ui.on('collectReceipts', () => this.quest.collectReceipts({ fromForm: true }));
     ui.on('action', (action, entry, context) => this.handleAction(action, entry, context));
-    ui.on('archive', () => ui.openArchive());
+    ui.on('archive', () => {
+      if (this.focus.active) this.reimburse?.open();
+      else this.enterGarageFlow();
+    });
     ui.on('questTrack', (id) => this.quest.track(id));
     ui.on('soundToggle', (muted) => this.audio.setMuted(muted));
   }
@@ -334,7 +343,11 @@ class GoodworkApp {
         this.ui.toast('车辆档案已调取', 'Aventis GT · 底盘检修完成 · 等待交付。');
         break;
       case 'archive':
-        this.ui.openArchive();
+        if (this.focus.active) this.reimburse?.open();
+        else {
+          this.ui.closePanel(false);
+          this.enterGarageFlow();
+        }
         break;
       default:
         break;
@@ -401,7 +414,7 @@ class GoodworkApp {
       setTimeout(() => document.body.classList.add('is-focus'), 460),
       setTimeout(() => {
         if (!this.focus.active) return;
-        this.ui.openGarageForm();
+        this.reimburse?.open();
       }, 1650),
     ];
 
@@ -603,7 +616,7 @@ class GoodworkApp {
         this.controls.target.fromArray(CAMERA.focusStages[CAMERA.focusStages.length - 1].target);
         this.camera.lookAt(this.controls.target);
         document.body.classList.add('is-focus');
-        this.ui.openGarageForm();
+        this.reimburse?.open();
         this.particles.sparks.burst(1.2);
       },
       closeInstant: () => {
@@ -618,7 +631,9 @@ class GoodworkApp {
         this.camera.lookAt(this.controls.target);
         this.controls.enabled = true;
         this.interaction.setEnabled(true);
+        this.reimburse?.close();
       },
+      reimburse: this.reimburse,
     };
   }
 }
