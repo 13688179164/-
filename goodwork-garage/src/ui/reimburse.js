@@ -243,12 +243,14 @@ async function deleteAttachmentBlob(id) {
 
 export class ReimburseBoard {
   constructor({ onClose, onToast } = {}) {
-    this.onClose = onClose || (() => {});
-    this.onToast = onToast || (() => {});
-    this._seededTasks = false;
-    this.tasks = this.loadTasks();
-    this.processedEvents = this.loadProcessedEvents();
-    this.settings = this.loadSettings();
+    console.log('%c[ReimburseBoard] 构造函数开始', 'color:#0066cc;font-weight:bold');
+    try {
+      this.onClose = onClose || (() => {});
+      this.onToast = onToast || (() => {});
+      this._seededTasks = false;
+      this.tasks = this.loadTasks();
+      this.processedEvents = this.loadProcessedEvents();
+      this.settings = this.loadSettings();
     this.viewDate = toDateKey();
     this.exportStart = this.settings.exportStart || monthStartKey();
     this.exportEnd = this.settings.exportEnd || toDateKey();
@@ -309,6 +311,11 @@ export class ReimburseBoard {
       console.error('[reimburse] cloud.init() 抛异常:', e);
       console.log('[reimburse] 当前状态:', this.cloud.getStatus());
     });
+    } catch (e) {
+      console.error('[ReimburseBoard] 构造函数抛异常:', e);
+      console.error('  栈:', e.stack);
+    }
+    console.log('%c[ReimburseBoard] 构造函数结束', 'color:#0066cc;font-weight:bold');
   }
 
   /* ---------------- 存储 ---------------- */
