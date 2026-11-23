@@ -1,11 +1,14 @@
 /**
- * 腾讯云开发 CloudBase PostgreSQL 同步
- * 团队共享一个工作区：所有设备使用 CloudBase 匿名登录，
- * 通过 app.rdb() (PostgREST RESTful API) 读写 PostgreSQL 实例。
+ * 腾讯云开发 PostgreSQL 同步 —— 纯 fetch 版本（零 SDK 依赖）
+ *
+ * 原理：CloudBase PostgREST 网关接受 Publishable Key 作为 Bearer token，
+ *       直接用 fetch 调 REST API，完全绕过 JS SDK 的 auth 网关路由问题。
+ *
+ * PostgREST 端点: https://{env}.api.tcloudbasegateway.com/v1/rdb/rest
  *
  * 表结构（四张表）：
  *   goodwork_tasks       报销记录主表
- *   goodwork_attachments 附件元数据表（外键 → goodwork_tasks）
+ *   goodwork_attachments 附件元数据表
  *   goodwork_processed   已报销事件表（去重追踪）
  *   goodwork_meta        工作区元数据（版本号等）
  *
@@ -15,10 +18,90 @@
 const SETTINGS_KEY = 'goodwork.cloud.settings.v1';
 const DEVICE_KEY = 'goodwork.cloud.device.v1';
 const DEFAULT_ENV_ID = 'attractive-starfish-d0bp2e865971';
-// CloudBase 发布密钥（Publishable Key）—— 前端访问网关的凭证
+// CloudBase Publishable Key — anon 角色的完整 JWT，直接当 Bearer token 用
 const PUBLISHABLE_KEY = 'eyJhbGciOiJSUzI1NiIsImtpZCI6IjIxMTE1ZTA4LWJjYjQtNGViZS1iMzQ2LTRkMDBhOWUxMWY4NCJ9.eyJpc3MiOiJodHRwczovL2F0dHJhY3RpdmUtc3RhcmZpc2gtZDBicDJlODY1OTcxLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsImV4cCI6NDA5OTEwNDgzOCwiaWF0IjoxNzk1NDIxNjM4LCJub25jZSI6IkM2OXNFOVRWU2E2N09TRmNfbEFBLWciLCJhdF9oYXNoIjoiQzY5c0U5VFZTYTY3T1NGY19sQUEtZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.BbEqc_mku1-zXHvEAI3bUhUyDfjlkPhbyE_gHrUsF2mDuc0FlgskbZ9qziNP9Bk3gW4mWNDetSt7fq70Z6Y3fsypBOZz9MGb5Hgf1Cm1LPZsdXi8Vaw5nDnUnR9wx6YgxhjGYUwI9hYRGMmy7FR4YtRZMQC9wR0VJAda6G1Ac_YF00R1Ptdw_ljUmyB5-W5osDiklvP_XcsbboR4ph9Poo8tCJtpzDkIhvZ9A0ypSfM9HZnqHRpV-X3VJy3fDyeQ6tKZGt6iCbrUuFDqUXBZ8oCCRWAYXKS2gUg5OyGa538Sj6llJDlJxJjEqgz9lfaiWRnYuGTQv78E-5WEkdINuA';
-const POLL_INTERVAL_MS = 3000; // 3 秒轮询一次
-const PUSH_DEBOUNCE_MS = 1500;  // 本地修改后的上传防抖
+const POLL_INTERVAL_MS = 3000;
+const PUSH_DEBOUNCE_MS = 1500;
+
+// ========== PostgREST 辅助函数 ==========
+
+function pgBaseUrl(envId) {
+  return `https://${envId}.api.tcloudbasegateway.com/v1/rdb/rest`;
+}
+
+function pgHeaders() {
+  return {
+    'Authorization': `Bearer ${PUBLISHABLE_KEY}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+}
+
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    Promise.resolve(promise).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
+/**
+ * 直接调 PostgREST REST API
+ * @param {string} method - GET / POST / PATCH / DELETE
+ * @param {string} envId - 云开发环境 ID
+ * @param {string} table - 表名
+ * @param {object} opts - { select, order, limit, filter, body, prefer }
+ * @returns {Promise<Array|object>} 解析后的 JSON 数组或对象
+ */
+async function pgRequest(method, envId, table, opts = {}) {
+  const url = new URL(`${pgBaseUrl(envId)}/${table}`);
+
+  if (opts.select) url.searchParams.set('select', opts.select);
+  if (opts.order) {
+    const o = Array.isArray(opts.order) ? opts.order : [opts.order];
+    o.forEach((item, i) => url.searchParams.set(`order${i > 0 ? '.' + i : ''}`, item));
+  }
+  if (opts.limit != null) url.searchParams.set('limit', String(opts.limit));
+  if (opts.offset != null) url.searchParams.set('offset', String(opts.offset));
+  if (opts.filter) {
+    for (const [k, v] of Object.entries(opts.filter)) {
+      url.searchParams.set(k, v);
+    }
+  }
+
+  const headers = pgHeaders();
+  if (opts.prefer) headers['Prefer'] = opts.prefer;
+
+  const fetchOpts = { method, headers };
+  if (opts.body != null) {
+    fetchOpts.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+  }
+
+  const resp = await fetch(url.toString(), fetchOpts);
+
+  if (resp.status === 204) return null;
+
+  let text;
+  try { text = await resp.text(); } catch { text = ''; }
+  let data;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+
+  // PostgREST 错误格式: { code, message, details, hint }
+  if (!resp.ok) {
+    const err = new Error(
+      (data?.message || String(data || resp.statusText))
+    );
+    err.code = data?.code;
+    err.details = data?.details;
+    err.hint = data?.hint;
+    err.status = resp.status;
+    throw err;
+  }
+
+  return data;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -38,36 +121,15 @@ function makeDeviceId() {
   return `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function withTimeout(promise, ms, message) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
-    Promise.resolve(promise).then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (err) => { clearTimeout(timer); reject(err); }
-    );
-  });
-}
-
 /**
- * 把 PostgREST 的 { data, error } 返回值解析成纯数据或抛错。
+ * 把 PostgREST 的异常直接 throw —— 因为纯 fetch 版本返回值就是 data 或 throw
  */
-function assertOk(res, what) {
-  if (res?.error) {
-    const e = res.error;
-    const msg = typeof e === 'string' ? e : (e.message || e.details || e);
-    const err = new Error(`${what}失败：${msg}`);
-    err.__code = e?.code;
-    throw err;
-  }
-  return res?.data;
+function checkOk(data, what) {
+  // pgRequest 已经 throw on error，这里只是占位保持 API 一致
+  return data;
 }
 
-function rowsOf(data) {
-  if (!data) return [];
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data.data)) return data.data;
-  return [];
-}
+// ========== CloudSync 类 ==========
 
 export class CloudSync {
   constructor({
@@ -95,9 +157,6 @@ export class CloudSync {
     this.deviceId = localStorage.getItem(DEVICE_KEY) || makeDeviceId();
     try { localStorage.setItem(DEVICE_KEY, this.deviceId); } catch { /* noop */ }
 
-    this.app = null;
-    this.auth = null;
-    this.rdb = null;
     this.connected = false;
     this.dirty = false;
     this.syncing = false;
@@ -107,8 +166,8 @@ export class CloudSync {
     this.localVersion = 0;
     this.pushTimer = null;
     this.pollTimer = null;
-    this.lastPollAt = null;          // 上次成功拉取的 updated_at 阈值
-    this.lastRemoteUpdatedAt = '';   // 云端最新 updated_at
+    this.lastPollAt = null;
+    this.lastRemoteUpdatedAt = '';
     this.errorDetail = '';
   }
 
@@ -138,64 +197,29 @@ export class CloudSync {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); } catch { /* noop */ }
   }
 
-  // ========== SDK 初始化 ==========
-
-  async loadSdk() {
-    if (window.cloudbase) return window.cloudbase;
-    const url = new URL('vendor/cloudbase.full.js', document.baseURI).href;
-    await new Promise((resolve, reject) => {
-      const existing = document.querySelector('script[data-goodwork-cloudbase]');
-      if (existing) {
-        if (window.cloudbase) resolve();
-        else existing.addEventListener('load', resolve, { once: true });
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = url;
-      script.dataset.goodworkCloudbase = '1';
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('云开发 SDK 加载失败'));
-      document.head.appendChild(script);
-    });
-    if (!window.cloudbase) throw new Error('云开发 SDK 未就绪');
-    return window.cloudbase;
-  }
+  // ========== 连接（纯 fetch 版：Publishable Key 就是一切，无需 SDK 初始化）==========
 
   async ensureApp(envId = this.envId) {
-    if (this.app && this.settings.envId === envId && this.rdb) return;
+    if (this.connected && this.settings.envId === envId) return;
     this.resetConnection();
-    const sdk = await this.loadSdk();
     this.settings.envId = envId;
     this.saveSettings();
-    // apiOrigin: 强制 auth 也走新网关 (api.tcloudbasegateway.com)
-    // v2.27.1 vendor SDK 默认 auth 走老网关 ap-shanghai.tcb-api.tencentcloudapi.com
-    // 老网关匿名登录没开，必须覆盖到新网关
-    this.app = sdk.init({
-      env: envId,
-      accessKey: PUBLISHABLE_KEY,
-      apiOrigin: `https://${envId}.api.tcloudbasegateway.com`,
-    });
-    this.auth = this.app.auth({ persistence: 'local' });
-    // rdb() 返回 PostgREST 查询构造器
-    if (typeof this.app.rdb === 'function') {
-      this.rdb = this.app.rdb();
-    } else {
-      throw new Error('当前 CloudBase SDK 版本不支持 PostgreSQL (app.rdb)。请升级 SDK。');
-    }
+    // 发一个轻量请求验证连通性 —— 读 goodwork_meta 表
+    await withTimeout(
+      pgRequest('GET', envId, 'goodwork_meta', { select: 'key', limit: 1 }),
+      10000,
+      '连接 PostgreSQL 超时，请检查网络或安全域名配置。'
+    );
+    this.connected = true;
   }
 
   resetConnection() {
     this.stopPoll();
-    this.app = null;
-    this.auth = null;
-    this.rdb = null;
     this.connected = false;
     this.dirty = false;
     this.lastPollAt = null;
     this.lastRemoteUpdatedAt = '';
   }
-
-  // ========== 匿名登录 ==========
 
   async init() {
     if (!this.envId) {
@@ -204,17 +228,9 @@ export class CloudSync {
     }
     try {
       await this.ensureApp();
-      const loginState = await withTimeout(
-        this.auth.getLoginState(),
-        15000,
-        '检查云开发登录态超时，请检查网络或点击重新连接。'
-      );
-      if (loginState?.user) {
-        this.connected = true;
-        await this.afterConnect({ auto: this.autoSync, silent: true });
-      } else {
-        this.emit('need-login');
-      }
+      // 连上了 Publishable Key 就是 anon 角色 —— 不需要额外登录
+      this.connected = true;
+      await this.afterConnect({ auto: this.autoSync, silent: true });
     } catch (err) {
       this.emit('need-login', { message: this.friendlyError(err) });
     }
@@ -227,13 +243,12 @@ export class CloudSync {
     this.settings.autoSync = this.autoSync;
     this.saveSettings();
 
-    await this.ensureApp(targetEnv);
     this.emit('connecting');
     try {
       await withTimeout(
-        this.auth.signInAnonymously(),
-        30000,
-        '匿名登录超时，请检查网络或云开发环境。'
+        this.ensureApp(targetEnv),
+        15000,
+        '连接 PostgreSQL 超时，请检查网络或安全域名配置。'
       );
     } catch (err) {
       const message = this.friendlyError(err);
@@ -241,14 +256,12 @@ export class CloudSync {
       this.emit('error', { message });
       throw new Error(message);
     }
-    this.connected = true;
     await this.afterConnect({ auto: this.autoSync });
     return true;
   }
 
   async disconnect() {
     this.stopPoll();
-    try { await this.auth?.signOut?.(); } catch { /* noop */ }
     this.connected = false;
     this.dirty = false;
     this.lastPollAt = null;
@@ -273,9 +286,7 @@ export class CloudSync {
 
   // ========== 数据库读写 ==========
 
-  /** 把 PG 行转成本地 Task 对象 */
   rowToTask(row) {
-    // attachments 在关联查询里返回 rows，在批量 push 时传 JSONB
     const attachRows = row.attachments || [];
     return {
       id: row.id,
@@ -307,7 +318,6 @@ export class CloudSync {
     };
   }
 
-  /** 把本地 Task 转成 PG 行（不含附件表，附件单写） */
   taskToRow(task, updatedAt) {
     return {
       id: task.id,
@@ -337,21 +347,19 @@ export class CloudSync {
   }
 
   async connectData(mode = 'auto') {
-    // 拉全量任务（不带关联，避免 PostgREST schema cache 的 PGRST200 错误）
     let rows = [];
     try {
-      const res = await withTimeout(
-        this.rdb.from('goodwork_tasks')
-          .select('*')
-          .order('updated_at', { ascending: false })
-          .limit(5000),
+      rows = await withTimeout(
+        pgRequest('GET', this.envId, 'goodwork_tasks', {
+          select: '*',
+          order: ['updated_at.desc'],
+          limit: 5000,
+        }),
         20000,
         '读取云端任务超时，请检查数据库权限。'
       );
-      rows = assertOk(res, '读取任务');
     } catch (err) {
-      // 表不存在 → 首次使用
-      if (/relation|does not exist|42P01|PGRST200/.test(err.message) || err.__code === '42P01') {
+      if (/relation|does not exist|42P01|PGRST200/i.test(err.message)) {
         rows = [];
       } else {
         throw err;
@@ -362,15 +370,13 @@ export class CloudSync {
     let attachRows = [];
     if (rows.length > 0) {
       try {
-        const aRes = await withTimeout(
-          this.rdb.from('goodwork_attachments').select('*'),
+        attachRows = await withTimeout(
+          pgRequest('GET', this.envId, 'goodwork_attachments', { select: '*' }),
           20000, '读取附件超时'
         );
-        attachRows = assertOk(aRes, '读取附件');
       } catch { attachRows = []; }
     }
 
-    // 构建 task_id → attachments 索引
     const attachByTask = new Map();
     for (const a of attachRows) {
       const list = attachByTask.get(a.task_id) || [];
@@ -380,17 +386,15 @@ export class CloudSync {
 
     let processed = [];
     try {
-      const pRows = await withTimeout(
-        this.rdb.from('goodwork_processed').select(),
+      processed = await withTimeout(
+        pgRequest('GET', this.envId, 'goodwork_processed', { select: '*' }),
         20000,
         '读取已报销事件超时'
       );
-      processed = assertOk(pRows, '读取已报销');
     } catch { processed = []; }
 
     const remoteTasks = rows.map((r) => {
       const t = this.rowToTask(r);
-      // 1. 先从 goodwork_attachments 关联表补
       const linked = attachByTask.get(r.id) || [];
       if (linked.length) {
         t.attachments = linked.map((a) => ({
@@ -398,7 +402,6 @@ export class CloudSync {
           size: Number(a.size) || 0, type: a.mime_type || '',
         }));
       }
-      // 2. 如果还没有，尝试从 cloud_file_ids JSONB 里补（兼容性）
       if (!t.attachments?.length && r.cloud_file_ids) {
         try {
           const cids = typeof r.cloud_file_ids === 'string' ? JSON.parse(r.cloud_file_ids) : r.cloud_file_ids;
@@ -433,13 +436,10 @@ export class CloudSync {
       this.applyRemote(remoteTasks, remoteProcessed, { force: true, silent: true });
       return;
     }
-    // auto + 云端为空 → 看本地有没有数据
     if (localHasData) {
       this.dirty = true;
       this.localChangedAt = nowIso();
       await this.pushNow({ force: true, silent: true });
-    } else {
-      // 都空，不做什么
     }
   }
 
@@ -482,7 +482,7 @@ export class CloudSync {
   // ========== 上传（本地 → PG）==========
 
   async pushNow({ force = false, silent = false } = {}) {
-    if (!this.connected || !this.rdb) return false;
+    if (!this.connected) return false;
     if (this.syncing) { return false; }
     if (!force && !this.dirty) return true;
     this.syncing = true;
@@ -495,15 +495,14 @@ export class CloudSync {
 
       // --- 1. upsert 所有 tasks ---
       const taskRows = (state.tasks || []).map((t) => this.taskToRow(t, now));
-      // PostgREST 通过 POST + Prefer: resolution=merge-duplicates 实现 upsert
-      // CloudBase PG 的 upsert 方式：insert 时 Prefer: resolution=merge-duplicates
       if (taskRows.length > 0) {
-        const res = await withTimeout(
-          this.rdb.from('goodwork_tasks').upsert(taskRows).select('id, updated_at'),
-          20000,
-          '上传任务到云端超时'
+        await withTimeout(
+          pgRequest('POST', this.envId, 'goodwork_tasks', {
+            body: taskRows,
+            prefer: 'resolution=merge-duplicates',
+          }),
+          20000, '上传任务到云端超时'
         );
-        assertOk(res, '上传任务');
       }
 
       // --- 2. upsert 所有 attachments ---
@@ -522,13 +521,13 @@ export class CloudSync {
         }
       }
       if (attachRows.length > 0) {
-        // 先删后插（避免外键冲突）
-        const attachRes = await withTimeout(
-          this.rdb.from('goodwork_attachments').upsert(attachRows).select('id'),
-          20000,
-          '上传附件元数据超时'
+        await withTimeout(
+          pgRequest('POST', this.envId, 'goodwork_attachments', {
+            body: attachRows,
+            prefer: 'resolution=merge-duplicates',
+          }),
+          20000, '上传附件元数据超时'
         );
-        assertOk(attachRes, '上传附件元数据');
       }
 
       // --- 3. upsert 所有 processed events ---
@@ -542,27 +541,30 @@ export class CloudSync {
         created_at: e.createdAt || now,
       }));
       if (procRows.length > 0) {
-        const pRes = await withTimeout(
-          this.rdb.from('goodwork_processed').upsert(procRows).select('task_id'),
-          20000,
-          '上传已报销事件超时'
+        await withTimeout(
+          pgRequest('POST', this.envId, 'goodwork_processed', {
+            body: procRows,
+            prefer: 'resolution=merge-duplicates',
+          }),
+          20000, '上传已报销事件超时'
         );
-        assertOk(pRes, '上传已报销事件');
       }
 
       // --- 4. 更新 meta ---
       await withTimeout(
-        this.rdb.from('goodwork_meta').upsert([{
-          key: 'workspace',
-          value: JSON.stringify({
-            name: 'GOODWORK 古德車房',
-            last_writer: this.deviceId,
-            last_written_at: now,
-          }),
-          updated_at: now,
-        }]),
-        10000,
-        '更新 meta 超时'
+        pgRequest('POST', this.envId, 'goodwork_meta', {
+          body: [{
+            key: 'workspace',
+            value: JSON.stringify({
+              name: 'GOODWORK 古德車房',
+              last_writer: this.deviceId,
+              last_written_at: now,
+            }),
+            updated_at: now,
+          }],
+          prefer: 'resolution=merge-duplicates',
+        }),
+        10000, '更新 meta 超时'
       ).catch(() => { /* meta 失败不阻塞 */ });
 
       this.localChangedAt = now;
@@ -590,18 +592,16 @@ export class CloudSync {
     }
   }
 
-  // ========== 手动拉取 ==========
-
   async pullNow({ silent = false } = {}) {
     await this.connectData('pull');
     if (!silent) this.onToast('已从云端拉取', 'PostgreSQL 最新数据', 'ok');
   }
 
-  // ========== 定时轮询（替代 doc.watch）==========
+  // ========== 定时轮询 ==========
 
   startPoll() {
     this.stopPoll();
-    if (!this.connected || !this.rdb) return;
+    if (!this.connected) return;
     this.pollTimer = setInterval(() => this.pollTick(), POLL_INTERVAL_MS);
   }
 
@@ -613,144 +613,61 @@ export class CloudSync {
   async pollTick() {
     if (!this.connected || this.applying || this.syncing) return;
     try {
-      // 只拉比 lastRemoteUpdatedAt 更新的数据
       const since = this.lastRemoteUpdatedAt || '1970-01-01T00:00:00.000Z';
-      const res = await this.rdb.from('goodwork_tasks')
-        .select('*')
-        .gt('updated_at', since)
-        .order('updated_at', { ascending: false })
-        .limit(500);
-      const rows = assertOk(res, '增量拉取');
+      // PostgREST 用 field=gt.value 语法
+      const rows = await pgRequest('GET', this.envId, 'goodwork_tasks', {
+        select: '*',
+        filter: { 'updated_at': `gt.${since}` },
+        order: ['updated_at.desc'],
+        limit: 500,
+      });
 
-      // 再拉 processed 的增量
-      const pres = await this.rdb.from('goodwork_processed')
-        .select()
-        .gt('created_at', since);
-      const pRows = assertOk(pres, '增量拉取已报销');
-
-      // 单独拉附件
-      let attachRows = [];
-      if ((rows?.length || 0) > 0) {
-        try {
-          const aRes = await this.rdb.from('goodwork_attachments').select('*');
-          attachRows = assertOk(aRes, '增量拉取附件');
-        } catch { /* noop */ }
-      }
-      const attachByTask = new Map();
-      for (const a of attachRows) {
-        const list = attachByTask.get(a.task_id) || [];
-        list.push(a); attachByTask.set(a.task_id, list);
-      }
-      for (const r of rows) {
-        r.__attachments = attachByTask.get(r.id) || [];
-      }
+      const pRows = await pgRequest('GET', this.envId, 'goodwork_processed', {
+        select: '*',
+        filter: { 'created_at': `gt.${since}` },
+      });
 
       if ((rows?.length || 0) + (pRows?.length || 0) === 0) {
         this.lastPollAt = Date.now();
         return;
       }
 
-      // 合并更新：我们 applyRemote 会用全量数据，所以拉全量比较简单
-      // 但为了高效，我们只覆盖有变化的行
-      // 简化策略：直接拉全量 → 应用
       await this.connectData('pull');
     } catch (err) {
-      // 轮询失败不致命，下次重试
       if (Date.now() - (this.lastPollAt || 0) > 30000) {
         this.emit('error', { message: '轮询云端超时：' + this.friendlyError(err) });
       }
     }
   }
 
-  // ========== 附件 ==========
+  // ========== 附件（纯 fetch 版暂不支持云存储 —— 用 IndexedDB 本地缓存）==========
+  // 注：云存储需要 SDK 的 uploadFile / getTempFileURL，这里没有 SDK。
+  // 附件元数据已通过 goodwork_attachments 表同步，blob 保留在本地 IndexedDB。
 
   async uploadAttachment(meta, blob) {
-    if (!this.connected || !this.app) throw new Error('尚未连接云开发。');
-    const ext = (String(meta.name).match(/\.[A-Za-z0-9]{1,10}$/) || [''])[0];
-    const cloudPath = `goodwork/team/${meta.id}${ext}`;
-    let file = blob;
-    if (!(blob instanceof File)) {
-      file = new File([blob], meta.name || '附件', {
-        type: meta.type || 'application/octet-stream',
-      });
-    }
-    const res = await withTimeout(
-      this.app.uploadFile({ cloudPath, filePath: file }),
-      120000,
-      '附件上传云端超时，请检查网络后重试。'
-    );
-    if (!res?.fileID) throw new Error('云存储未返回 fileID。');
-    return res.fileID;
+    // 纯 fetch 版本跳过云存储上传（blob 保留本地）
+    // 附件元数据会在 pushNow 里通过 goodwork_attachments 表同步
+    return '';
   }
 
   async downloadAttachment(fileID) {
-    if (!this.connected || !this.app) throw new Error('尚未连接云开发。');
-    const res = await withTimeout(
-      this.app.getTempFileURL({ fileList: [fileID] }),
-      30000,
-      '获取云端附件链接超时，请检查网络。'
-    );
-    const item = res?.fileList?.find((x) => x.fileID === fileID) || res?.fileList?.[0];
-    const tempUrl = item?.tempFileURL || item?.download_url;
-    if (!tempUrl) throw new Error('无法获取云端附件链接。');
-    const resp = await fetch(tempUrl);
-    if (!resp.ok) throw new Error('云端附件下载失败。');
-    return await resp.blob();
+    throw new Error('纯 fetch 版本暂不支持云端附件下载，请升级到完整 SDK 版本。');
   }
 
   async syncTaskAttachments(task) {
     if (!this.connected) return 0;
-    let uploaded = 0;
-    for (const meta of task.attachments || []) {
-      if (meta.cloudFileId) continue;
-      let blob = null;
-      try { blob = await this.getAttachmentBlob(meta.id); } catch { blob = null; }
-      if (!blob) continue;
-      try {
-        meta.cloudFileId = await this.uploadAttachment(meta, blob);
-        uploaded++;
-      } catch (err) {
-        console.warn('附件上传云端失败', meta.name, err);
-      }
-    }
-    if (uploaded) {
-      this.onAttachmentsUploaded();
-      this.markLocalChange();
-    }
-    return uploaded;
+    // 纯 fetch 版本：只同步附件元数据到 goodwork_attachments 表（已在 pushNow 里做）
+    // blob 仍留在本地 IndexedDB
+    this.markLocalChange();
+    return 0;
   }
 
   async syncAllAttachments({ silent = false } = {}) {
-    if (!this.connected || this.uploading) return 0;
-    this.uploading = true;
-    let uploaded = 0;
-    const tasks = this.getState().tasks || [];
-    for (const task of tasks) {
-      for (const meta of task.attachments || []) {
-        if (meta.cloudFileId) continue;
-        let blob = null;
-        try { blob = await this.getAttachmentBlob(meta.id); } catch { blob = null; }
-        if (!blob) continue;
-        try {
-          meta.cloudFileId = await this.uploadAttachment(meta, blob);
-          uploaded++;
-          this.emit('syncing', { message: `正在同步附件 ${uploaded}` });
-        } catch (err) {
-          console.warn('附件上传云端失败', meta.name, err);
-        }
-      }
-    }
-    this.uploading = false;
-    if (uploaded) {
-      this.onAttachmentsUploaded();
-      this.markLocalChange();
-      await this.pushNow({ force: true, silent: true });
-      if (!silent) this.onToast('附件已同步到云端', `${uploaded} 个文件上传完成。`, 'ok');
-    } else if (!silent) {
-      this.onToast('没有需要同步的附件', '所有附件都已存在于云端。');
-    }
-    this.emit(this.connected ? 'connected' : 'need-login');
-    return uploaded;
+    if (!this.connected) return 0;
+    // 触发一次 push 让附件元数据同步
+    await this.pushNow({ force: true, silent: true });
+    this.emit('connected');
+    return 0;
   }
 
   setAutoSync(value) {
@@ -770,30 +687,24 @@ export class CloudSync {
   // ========== 错误解析 ==========
 
   friendlyError(err) {
-    const code = String(err?.code || err?.__code || err?.error?.code || '');
-    const detail = err?.error?.message || err?.error?.details || err?.message || '';
-    const msg = `${code} ${detail || String(err || '未知错误')}`;
+    const code = String(err?.code || '');
+    const detail = err?.message || err?.details || String(err || '');
+    const msg = `${code} ${detail}`.trim();
 
-    if (/anonymous.*(not|disabled|enable)|匿名.*(未|不)/i.test(msg)) {
-      return '云开发「匿名登录」未开启，请在控制台 → 登录授权 → 开启匿名登录。';
-    }
-    if (/relation.*does not exist|does not exist|42P01/i.test(msg) || err?.__code === '42P01') {
+    if (/relation.*does not exist|does not exist|42P01/i.test(msg)) {
       return '数据库表不存在 —— 请在云开发控制台 PostgreSQL → SQL 编辑器里执行建表 SQL。';
     }
-    if (/permission denied|42501|GRANT|权限/i.test(msg)) {
+    if (/permission denied|42501|GRANT/i.test(msg)) {
       return '数据库权限不足 —— 请在控制台 SQL 编辑器里执行 GRANT 语句（给 anon 角色授权）。';
     }
-    if (/violates row-level security policy|23503|RLS|row level/i.test(msg)) {
-      return 'RLS 策略拦截 —— 请在控制台 SQL 编辑器里执行 RLS Policy 创建语句。';
-    }
-    if (/domain|origin|cors|安全域名/i.test(msg)) {
+    if (/domain|origin|cors/i.test(msg)) {
       return '当前站点未加入云开发安全域名，请在控制台添加本站域名。';
-    }
-    if (/env.*(not.*exist|invalid)|环境.*(不存在|无效)/i.test(msg)) {
-      return '云开发环境 ID 无效或不存在。';
     }
     if (/network|timeout|ETIMEDOUT/i.test(msg)) {
       return '网络超时，请检查网络连接后重试。';
+    }
+    if (/not found|404/i.test(msg)) {
+      return '云开发环境不存在或 Publishable Key 已失效。';
     }
     return msg || '未知错误';
   }
