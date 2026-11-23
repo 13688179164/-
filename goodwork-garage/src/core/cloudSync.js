@@ -455,20 +455,22 @@ export class CloudSync {
   }
 
   taskToRow(task, updatedAt) {
+    // 🔧 PostgreSQL 字段长度保护：以下字段全是 varchar(40)
+    const v40 = (v) => String(v ?? '').slice(0, 40);
     const row = {
-      id: task.id ?? '',
-      applicant: task.applicant ?? '',
+      id: v40(task.id),
+      applicant: v40(task.applicant),
       amount: task.amount ?? 0,
-      department: task.department ?? '',
-      category: task.category ?? '',
+      department: v40(task.department),
+      category: v40(task.category),
       applied_at: task.appliedAt ?? null,
-      content: task.content ?? '',
-      status: task.status ?? 'pending',
+      content: task.content ?? '',  // text 类型，没长度限制
+      status: v40(task.status),
       has_invoice: !!task.hasInvoice,
       invoice_received: !!task.invoiceReceived,
       invoice_received_at: task.invoiceReceivedAt ?? null,
       reimbursed_at: task.reimbursedAt ?? null,
-      reimbursed_from: task.reimbursedFrom ?? null,
+      reimbursed_from: v40(task.reimbursedFrom),
       high_value_part: task.highValuePart ?? null,
       cross_month: task.crossMonth ?? null,
       stocking_cost: task.stockingCost ?? null,
@@ -476,7 +478,7 @@ export class CloudSync {
       cloud_file_ids: (task.attachments || [])
         .filter((a) => a.cloudFileId)
         .map((a) => ({ id: a.id, cloudFileId: a.cloudFileId })),
-      writer_device_id: this.deviceId,
+      writer_device_id: v40(this.deviceId),
       created_at: task.createdAt ?? updatedAt,
       updated_at: updatedAt,
     };

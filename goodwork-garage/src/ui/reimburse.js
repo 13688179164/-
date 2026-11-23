@@ -108,8 +108,17 @@ function localDateTimeFromIso(iso) {
   return `${toDateKey(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function uid(prefix = 'GW') {
-  if (crypto?.randomUUID) return `${prefix}-${crypto.randomUUID()}`;
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  // 🔧 数据库 id 字段是 varchar(40)，必须严格 ≤ 40 chars
+  // 用 short uuid (8 chars) 替代完整 UUID (36 chars)
+  // 这样前缀 + short = 安全在 40 以内
+  const shortId = () => Math.random().toString(36).slice(2, 10); // 8 chars
+  const p = (prefix || '').slice(0, 10); // 前缀也截断防超长
+  if (crypto?.randomUUID) {
+    // UUID 前 8 位短 id 更够了，8 chars 足够
+    const full = crypto.randomUUID();
+    return `${p}-${full.slice(0, 8)}`;  // 前缀 + 8 chars = ≤ 19 chars，安全！
+  }
+  return `${p}-${Date.now().toString(36).slice(-4)}${shortId()}`;  // ≤ 16 chars
 }
 function sanitizeNamePart(value) {
   return String(value ?? '')
