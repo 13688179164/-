@@ -3020,6 +3020,536 @@ export class ReimburseBoard {
     return window.XLSX;
   }
 
+  async loadExcelJS() {
+    if (window.ExcelJS) return window.ExcelJS;
+    const url = new URL('vendor/exceljs.min.js', document.baseURI).href;
+    await new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-goodwork-exceljs]');
+      if (existing) {
+        if (window.ExcelJS) resolve();
+        else existing.addEventListener('load', resolve, { once: true });
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = url;
+      script.dataset.goodworkExceljs = '1';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('ExcelJS 组件加载失败'));
+      document.head.appendChild(script);
+    });
+    if (!window.ExcelJS) throw new Error('ExcelJS 组件未就绪');
+    return window.ExcelJS;
+  }
+
+  async loadFFlate() {
+    if (window.fflate) return window.fflate;
+    const url = new URL('vendor/fflate.min.js', document.baseURI).href;
+    await new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-goodwork-fflate]');
+      if (existing) {
+        if (window.fflate) resolve();
+        else existing.addEventListener('load', resolve, { once: true });
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = url;
+      script.dataset.goodworkFflate = '1';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('fflate 组件加载失败'));
+      document.head.appendChild(script);
+    });
+    if (!window.fflate) throw new Error('fflate 组件未就绪');
+    return window.fflate;
+  }
+
+  injectInternalHyperlinks(fflate, buffer, links) {
+    const escAttr = (value) => String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
+    let bytes;
+    if (buffer instanceof Uint8Array) bytes = buffer;
+    else if (buffer instanceof ArrayBuffer) bytes = new Uint8Array(buffer);
+    else bytes = new Uint8Array(buffer.buffer, buffer.byteOffset || 0, buffer.byteLength);
+    const zip = fflate.unzipSync(bytes);
+    const read = (path) => (zip[path] ? fflate.strFromU8(zip[path]) : null);
+    const workbookXml = read('xl/workbook.xml');
+    const relsXml = read('xl/_rels/workbook.xml.rels');
+    if (!workbookXml || !relsXml) return null;
+    const sheetPath = (name) => {
+      const sheetTag = [...workbookXml.matchAll(/<sheet\b[^>]*\/?>/g)]
+        .map((m) => m[0])
+        .find((tag) => tag.includes(`name="${name}"`));
+      if (!sheetTag) return null;
+      const rid = sheetTag.match(/r:id="([^"]+)"/)?.[1];
+      if (!rid) return null;
+      const relTag = [...relsXml.matchAll(/<Relationship\b[^>]*\/?>/g)]
+        .map((m) => m[0])
+        .find((tag) => tag.includes(`Id="${rid}"`));
+      const target = relTag?.match(/Target="([^"]+)"/)?.[1];
+      if (!target) return null;
+      return target.startsWith('/') ? target.slice(1) : `xl/${target}`;
+    };
+    const inject = (name, items) => {
+      if (!items.length) return;
+      const path = sheetPath(name);
+      if (!path || !zip[path]) return;
+      let xml = read(path);
+      if (!xml || xml.includes('<hyperlinks')) return;
+      const block = `<hyperlinks>${items.map((item) => `<hyperlink ref="${escAttr(item.ref)}" location="${escAttr(item.location)}" display="${escAttr(item.display)}"/>`).join('')}</hyperlinks>`;
+      if (xml.includes('<pageMargins')) xml = xml.replace('<pageMargins', `${block}<pageMargins`);
+      else xml = xml.replace('</worksheet>', `${block}</worksheet>`);
+      zip[path] = fflate.strToU8(xml);
+    };
+    inject('报销明细', links.detail);
+    inject('附件清单', links.files);
+    return fflate.zipSync(zip, { level: 6 });
+  }
+
+  loadImageFromUrl(url) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('图片无法解码'));
+      img.src = url;
+    });
+  }
+
+  async blobToPreviewPng(blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = await this.loadImageFromUrl(url);
+      const nw = img.naturalWidth || img.width || 640;
+      const nh = img.naturalHeight || img.height || 480;
+      const scale = Math.min(1, 820 / Math.max(nw, nh));
+      const width = Math.max(1, Math.round(nw * scale));
+      const height = Math.max(1, Math.round(nh * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+      return {
+        base64: canvas.toDataURL('image/png').split(',')[1],
+        width,
+        height,
+      };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async makeAttachmentStrip(items) {
+    const W = 186;
+    const H = 62;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#f6f3ec';
+    ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#d7d0c1';
+    ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+    let x = 4;
+    let shown = 0;
+    for (const item of items) {
+      if (shown >= 3 || x + 56 > W - 4) break;
+      if (item.image) {
+        try {
+          const img = await this.loadImageFromUrl(`data:image/png;base64,${item.image.base64}`);
+          const iw = img.naturalWidth || img.width || 1;
+          const ih = img.naturalHeight || img.height || 1;
+          const ratio = Math.max(56 / iw, 52 / ih);
+          const sw = 56 / ratio;
+          const sh = 52 / ratio;
+          const sx = (iw - sw) / 2;
+          const sy = (ih - sh) / 2;
+          ctx.drawImage(img, sx, sy, sw, sh, x, 5, 56, 52);
+        } catch {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(x, 5, 56, 52);
+        }
+      } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, 5, 56, 52);
+        const ext = (String(item.name).match(/\.([A-Za-z0-9]{1,5})$/) || [])[1] || 'DOC';
+        ctx.fillStyle = '#b08d57';
+        ctx.font = 'bold 13px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(ext.toUpperCase(), x + 28, 35);
+        ctx.fillStyle = '#8a8a8a';
+        ctx.font = '8px sans-serif';
+        ctx.fillText('文档', x + 28, 48);
+      }
+      ctx.strokeStyle = '#cfc7b6';
+      ctx.strokeRect(x + 0.5, 5.5, 55, 51);
+      shown++;
+      x += 60;
+    }
+    if (items.length > shown) {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+      ctx.fillRect(W - 40, 4, 36, 18);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`+${items.length - shown}`, W - 22, 17);
+    }
+    return canvas.toDataURL('image/png').split(',')[1];
+  }
+
+  async prepareExcelAttachments(stats) {
+    const byTask = new Map();
+    const previewTasks = [];
+    let imageCount = 0;
+    let docCount = 0;
+    let missingCount = 0;
+    for (const task of stats.tasks) {
+      const items = [];
+      for (const meta of task.attachments || []) {
+        let blob = null;
+        try { blob = await readAttachmentBlob(meta.id); } catch { blob = null; }
+        const isImage = isImageFile({ name: meta.name, type: meta.type });
+        let image = null;
+        if (blob && isImage) {
+          try {
+            image = await this.blobToPreviewPng(blob);
+          } catch (err) {
+            console.warn('附件图片预览生成失败', meta.name, err);
+          }
+        }
+        if (image) imageCount++;
+        else if (isImage) missingCount++;
+        else docCount++;
+        items.push({
+          id: meta.id,
+          name: meta.name || '附件',
+          size: Number(meta.size) || 0,
+          type: meta.type || '',
+          isImage,
+          image,
+          missing: !blob,
+          previewRow: 0,
+          previewWidth: 0,
+          previewHeight: 0,
+        });
+      }
+      if (items.length) {
+        const entry = { task, items, strip: '', sectionRow: 0 };
+        try {
+          entry.strip = await this.makeAttachmentStrip(items);
+        } catch (err) {
+          console.warn('附件缩略图生成失败', err);
+        }
+        byTask.set(task.id, entry);
+        previewTasks.push(entry);
+      }
+    }
+    let row = 4;
+    for (const entry of previewTasks) {
+      entry.sectionRow = row;
+      row += 1;
+      for (const item of entry.items) {
+        item.previewRow = row;
+        if (item.image) {
+          const scale = Math.min(1, 420 / item.image.width, 300 / item.image.height);
+          item.previewWidth = Math.max(1, Math.round(item.image.width * scale));
+          item.previewHeight = Math.max(1, Math.round(item.image.height * scale));
+        }
+        row += 1;
+      }
+      row += 1;
+    }
+    return {
+      byTask,
+      previewTasks,
+      imageCount,
+      docCount,
+      missingCount,
+      total: imageCount + docCount + missingCount,
+    };
+  }
+
+  buildStatsWorkbookExcelJS(ExcelJS, stats, start, end, attachmentData) {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'GOODWORK FINANCE OS';
+    wb.created = new Date();
+    const statusLabel = (s) => STATUS_LABEL[s] || s;
+    const thin = { style: 'thin', color: { argb: 'FFD9DEE7' } };
+    const border = { top: thin, bottom: thin, left: thin, right: thin };
+    const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111C2B' } };
+    const headerFont = { name: 'Microsoft YaHei', size: 10, bold: true, color: { argb: 'FFE9DFC9' } };
+    const bodyFont = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF2A3442' } };
+    const subFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4EDE0' } };
+    const moneyFmt = '#,##0.00';
+    const setWidths = (ws, widths) => widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+    const headerRow = (ws, count) => {
+      const row = ws.getRow(1);
+      row.height = 28;
+      for (let c = 1; c <= count; c++) {
+        const cell = row.getCell(c);
+        cell.font = headerFont;
+        cell.fill = headerFill;
+        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        cell.border = border;
+      }
+    };
+    const bodyStyle = (row, count, options = {}) => {
+      for (let c = 1; c <= count; c++) {
+        const cell = row.getCell(c);
+        cell.font = bodyFont;
+        cell.border = border;
+        cell.alignment = {
+          vertical: 'middle',
+          wrapText: true,
+          horizontal: options.center?.includes(c) ? 'center' : 'left',
+        };
+      }
+      for (const c of options.money || []) {
+        const cell = row.getCell(c);
+        cell.numFmt = moneyFmt;
+        cell.alignment = { vertical: 'middle', horizontal: 'right' };
+      }
+    };
+    const links = { detail: [], files: [] };
+
+    const detail = wb.addWorksheet('报销明细', { views: [{ state: 'frozen', ySplit: 1 }] });
+    setWidths(detail, [12, 16, 18, 12, 42, 14, 14, 11, 34, 32]);
+    detail.addRow(['部门', '报销分类', '时间', '申请人员', '内容', '报销状态', '报销金额', '是否有发票', '高额配件成本属性', '附件']);
+    headerRow(detail, 10);
+    stats.tasks.forEach((t) => {
+      const section = attachmentData.byTask.get(t.id);
+      const row = detail.addRow([
+        t.department,
+        t.category,
+        formatDateTime(t.appliedAt),
+        t.applicant,
+        t.content,
+        statusLabel(t.status),
+        t.amount,
+        t.hasInvoice ? '是' : '否',
+        highValueText(t),
+        '',
+      ]);
+      row.height = section ? 88 : 26;
+      bodyStyle(row, 10, { center: [6, 8] });
+      row.getCell(7).numFmt = moneyFmt;
+      row.getCell(7).alignment = { vertical: 'middle', horizontal: 'right' };
+      row.getCell(5).alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+      row.getCell(9).alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+      row.getCell(10).alignment = { vertical: 'bottom', horizontal: 'center', wrapText: true };
+      if (section) {
+        const label = `点击查看 ${section.items.length} 个附件`;
+        row.getCell(10).value = label;
+        row.getCell(10).font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF1D4ED8' }, underline: true };
+        links.detail.push({
+          ref: `J${row.number}`,
+          location: `'附件预览'!A${section.sectionRow}`,
+          display: label,
+        });
+        if (section.strip) {
+          try {
+            const imageId = wb.addImage({ base64: section.strip, extension: 'png' });
+            detail.addImage(imageId, {
+              tl: { col: 9.03, row: row.number - 1 + 0.05 },
+              ext: { width: 186, height: 62 },
+              editAs: 'oneCell',
+            });
+          } catch (err) {
+            console.warn('附件缩略图写入失败', err);
+          }
+        }
+      } else {
+        row.getCell(10).value = '—';
+        row.getCell(10).alignment = { vertical: 'middle', horizontal: 'center' };
+      }
+    });
+    detail.autoFilter = 'A1:J1';
+
+    const dept = wb.addWorksheet('部门分类统计');
+    setWidths(dept, [14, 18, 8, 14, 14, 14, 16, 12, 14]);
+    dept.addRow(['部门', '报销分类', '笔数', '合计金额', '待报销金额', '已报销金额', '已补充附件金额', '有发票笔数', '高额配件笔数']);
+    headerRow(dept, 9);
+    for (const d of stats.departments) {
+      for (const c of d.categories) {
+        const row = dept.addRow([d.department, c.category, c.count, c.amount, c.pending, c.reimbursed, c.supplemented, c.invoice, c.highValue]);
+        bodyStyle(row, 9, { center: [3, 8, 9], money: [4, 5, 6, 7] });
+      }
+      const row = dept.addRow([d.department, '小计', d.count, d.amount, d.pending, d.reimbursed, d.supplemented, d.invoice, d.highValue]);
+      bodyStyle(row, 9, { center: [3, 8, 9], money: [4, 5, 6, 7] });
+      row.height = 24;
+      for (let c = 1; c <= 9; c++) {
+        const cell = row.getCell(c);
+        cell.fill = subFill;
+        cell.font = { name: 'Microsoft YaHei', size: 9, bold: true, color: { argb: 'FF6B5330' } };
+      }
+    }
+
+    const emp = wb.addWorksheet('员工报销统计');
+    setWidths(emp, [14, 8, 14, 14, 14, 18, 12, 14, 10]);
+    emp.addRow(['报销人员', '笔数', '合计金额', '待报销金额', '已报销金额', '已补充附件金额', '无发票笔数', '高额配件笔数', '附件数量']);
+    headerRow(emp, 9);
+    for (const e of stats.employees) {
+      const row = emp.addRow([e.name, e.count, e.amount, e.pending, e.reimbursed, e.supplemented, e.noInvoice, e.highValue, e.files]);
+      bodyStyle(row, 9, { center: [2, 7, 8, 9], money: [3, 4, 5, 6] });
+    }
+
+    const overview = wb.addWorksheet('总览报告');
+    setWidths(overview, [24, 44]);
+    overview.mergeCells('A1:B1');
+    overview.getCell('A1').value = 'GOODWORK 古德車房 · 报销统计报告';
+    overview.getCell('A1').font = { name: 'Microsoft YaHei', size: 16, bold: true, color: { argb: 'FF1F2937' } };
+    overview.getCell('A1').alignment = { horizontal: 'left', vertical: 'middle' };
+    overview.getRow(1).height = 34;
+    const topCategoryAll = stats.departments.flatMap((d) => d.categories.map((c) => ({ d: d.department, c }))).sort((a, b) => b.c.amount - a.c.amount)[0];
+    const overviewRows = [
+      ['统计范围', `${start} 至 ${end}`],
+      ['生成时间', localTimestamp()],
+      [],
+      ['总览指标', '数值'],
+      ['申请总笔数', stats.count],
+      ['报销总金额', stats.amount],
+      ['待报销金额', stats.statusAmounts.pending],
+      ['待报销笔数', stats.statusCounts.pending],
+      ['已报销金额', stats.statusAmounts.reimbursed],
+      ['已报销笔数', stats.statusCounts.reimbursed],
+      ['已补充附件金额', stats.statusAmounts.supplemented],
+      ['已补充附件笔数', stats.statusCounts.supplemented],
+      ['有发票笔数', stats.invoiceCount],
+      ['无发票笔数', stats.count - stats.invoiceCount],
+      ['有发票比例', `${(stats.invoiceRate * 100).toFixed(1)}%`],
+      ['高额配件笔数', stats.highValueCount],
+      ['高额配件金额', stats.highValueAmount],
+      ['附件总数', stats.fileCount],
+      [],
+      ['金额最高部门', stats.departments.slice().sort((a, b) => b.amount - a.amount)[0]?.department || '—'],
+      ['金额最高员工', stats.employees[0]?.name || '—'],
+      ['金额最高分类', topCategoryAll ? `${topCategoryAll.d} / ${topCategoryAll.c.category}` : '—'],
+    ];
+    overviewRows.forEach((data) => {
+      const row = overview.addRow(data);
+      row.height = 22;
+      for (let c = 1; c <= 2; c++) {
+        const cell = row.getCell(c);
+        cell.font = bodyFont;
+        cell.border = border;
+        cell.alignment = { vertical: 'middle', wrapText: true };
+      }
+      row.getCell(1).font = { name: 'Microsoft YaHei', size: 9, bold: true, color: { argb: 'FF6B5330' } };
+    });
+    for (const c of [1, 2]) {
+      overview.getRow(4).getCell(c).fill = headerFill;
+      overview.getRow(4).getCell(c).font = headerFont;
+      overview.getRow(4).getCell(c).alignment = { vertical: 'middle', horizontal: 'center' };
+    }
+    overview.getRow(4).height = 24;
+
+    const files = wb.addWorksheet('附件清单');
+    setWidths(files, [12, 12, 12, 12, 36, 12, 14, 10]);
+    files.addRow(['日期', '报销人员', '部门', '金额', '附件名称', '文件大小', '写入状态', '预览']);
+    headerRow(files, 8);
+    let fileRows = 0;
+    for (const t of stats.tasks) {
+      for (const a of t.attachments || []) {
+        const section = attachmentData.byTask.get(t.id);
+        const item = section?.items.find((x) => x.id === a.id);
+        const row = files.addRow([
+          dateKeyOf(t.appliedAt), t.applicant, t.department, t.amount, a.name,
+          a.size, a.written ? '已写入 D 盘' : '本地暂存', '',
+        ]);
+        bodyStyle(row, 8, { center: [1, 8], money: [4] });
+        if (item) {
+          row.getCell(8).value = '查看';
+          row.getCell(8).font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF1D4ED8' }, underline: true };
+          row.getCell(8).alignment = { vertical: 'middle', horizontal: 'center' };
+          links.files.push({
+            ref: `H${row.number}`,
+            location: `'附件预览'!A${item.previewRow}`,
+            display: '查看',
+          });
+        } else {
+          row.getCell(8).value = '—';
+        }
+        fileRows++;
+      }
+    }
+    if (!fileRows) {
+      files.mergeCells('A2:H2');
+      files.getCell('A2').value = '该范围内没有附件';
+      files.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
+      files.getCell('A2').font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF8A8A8A' } };
+    }
+
+    if (attachmentData.previewTasks.length) {
+      const preview = wb.addWorksheet('附件预览', { views: [{ state: 'frozen', ySplit: 3, showGridLines: false }] });
+      setWidths(preview, [64, 30, 18]);
+      preview.mergeCells('A1:C1');
+      preview.getCell('A1').value = 'GOODWORK 报销附件预览';
+      preview.getCell('A1').font = { name: 'Microsoft YaHei', size: 16, bold: true, color: { argb: 'FF1F2937' } };
+      preview.getCell('A1').alignment = { horizontal: 'left', vertical: 'middle' };
+      preview.getRow(1).height = 34;
+      preview.mergeCells('A2:C2');
+      preview.getCell('A2').value = `${stats.count} 笔报销 · ${attachmentData.total} 个附件 · 图片凭证可直接预览`;
+      preview.getCell('A2').font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF6B7280' } };
+      preview.getRow(2).height = 22;
+      preview.mergeCells('A3:C3');
+      preview.getCell('A3').value = '点击报销明细附件列的「点击查看 N 个附件」可跳转到本页。图片凭证已嵌入；PDF / Word / Excel 等文档请在报销工作台中下载原文件查看。';
+      preview.getCell('A3').font = { name: 'Microsoft YaHei', size: 8, color: { argb: 'FF8A8A8A' } };
+      preview.getCell('A3').alignment = { vertical: 'middle', wrapText: true };
+      preview.getRow(3).height = 30;
+
+      for (const entry of attachmentData.previewTasks) {
+        const t = entry.task;
+        const sectionRow = preview.getRow(entry.sectionRow);
+        sectionRow.height = 26;
+        preview.mergeCells(`A${entry.sectionRow}:C${entry.sectionRow}`);
+        const sectionCell = preview.getCell(`A${entry.sectionRow}`);
+        sectionCell.value = `【${t.applicant}】${formatDateTime(t.appliedAt)} · ${t.department} / ${t.category} · ¥${money(t.amount)} · ${entry.items.length} 个附件`;
+        sectionCell.fill = subFill;
+        sectionCell.font = { name: 'Microsoft YaHei', size: 10, bold: true, color: { argb: 'FF4B3A20' } };
+        sectionCell.alignment = { vertical: 'middle', horizontal: 'left' };
+
+        for (const item of entry.items) {
+          if (item.image) {
+            preview.getRow(item.previewRow).height = Math.max(60, Math.ceil(item.previewHeight / 1.333) + 8);
+            try {
+              const imageId = wb.addImage({ base64: item.image.base64, extension: 'png' });
+              preview.addImage(imageId, {
+                tl: { col: 0.03, row: item.previewRow - 1 + 0.04 },
+                ext: { width: item.previewWidth, height: item.previewHeight },
+                editAs: 'oneCell',
+              });
+            } catch (err) {
+              console.warn('附件预览图写入失败', err);
+            }
+            preview.mergeCells(`B${item.previewRow}:C${item.previewRow}`);
+            const metaCell = preview.getCell(`B${item.previewRow}`);
+            metaCell.value = `${item.name}\n${formatBytes(item.size)} · 图片凭证`;
+            metaCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF374151' } };
+            metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+          } else {
+            preview.getRow(item.previewRow).height = 40;
+            preview.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
+            const docCell = preview.getCell(`A${item.previewRow}`);
+            docCell.value = item.missing
+              ? `附件缓存缺失：${item.name}（${formatBytes(item.size)}）`
+              : `文档附件：${item.name}（${formatBytes(item.size)}）· 请在报销工作台中下载原文件查看`;
+            docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
+            docCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF6B5330' } };
+            docCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+            docCell.border = border;
+          }
+        }
+        preview.getRow(entry.sectionRow + entry.items.length + 1).height = 10;
+      }
+    }
+
+    wb.__goodworkLinks = links;
+    return wb;
+  }
+
   buildWorkbook(XLSX, stats, start, end) {
     const wb = XLSX.utils.book_new();
     const statusLabel = (s) => STATUS_LABEL[s] || s;
@@ -3123,10 +3653,37 @@ export class ReimburseBoard {
     const btns = $$('[data-rb="export"], [data-rb="report-export"]', this.root);
     btns.forEach((b) => { b.disabled = true; });
     try {
-      const XLSX = await this.loadXLSX();
-      const wb = this.buildWorkbook(XLSX, stats, this.exportStart, this.exportEnd);
-      const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      let blob;
+      let sheetCount = 5;
+      let attachmentData = null;
+      let embedded = false;
+      try {
+        const ExcelJS = await this.loadExcelJS();
+        attachmentData = await this.prepareExcelAttachments(stats);
+        const wb = this.buildStatsWorkbookExcelJS(ExcelJS, stats, this.exportStart, this.exportEnd, attachmentData);
+        const links = wb.__goodworkLinks || { detail: [], files: [] };
+        const buffer = await wb.xlsx.writeBuffer();
+        let finalBuffer = buffer;
+        if (links.detail.length || links.files.length) {
+          try {
+            const fflate = await this.loadFFlate();
+            const patched = this.injectInternalHyperlinks(fflate, buffer, links);
+            if (patched) finalBuffer = patched;
+          } catch (linkErr) {
+            console.warn('附件预览内部链接写入失败', linkErr);
+          }
+        }
+        blob = new Blob([finalBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        sheetCount = 5 + (attachmentData.previewTasks.length ? 1 : 0);
+        embedded = true;
+      } catch (excelJsErr) {
+        console.warn('带附件 Excel 生成失败，回退到普通 Excel', excelJsErr);
+        const XLSX = await this.loadXLSX();
+        const wb = this.buildWorkbook(XLSX, stats, this.exportStart, this.exportEnd);
+        const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        sheetCount = 5;
+      }
       const fileName = `GOODWORK报销统计_${this.exportStart}_至_${this.exportEnd}.xlsx`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -3146,7 +3703,10 @@ export class ReimburseBoard {
           console.warn('统计表写入 D 盘失败', err);
         }
       }
-      this.toast('Excel 已导出', `${stats.count} 笔 · 5 个工作表 · 含部门/分类与员工统计。`, 'ok');
+      const extra = embedded && attachmentData
+        ? ` · ${attachmentData.imageCount} 张图片凭证已嵌入附件列，点击可查看预览`
+        : '';
+      this.toast('Excel 已导出', `${stats.count} 笔 · ${sheetCount} 个工作表${extra}。`, 'ok');
       if (fromReport) this.closeReport();
     } catch (err) {
       console.error(err);

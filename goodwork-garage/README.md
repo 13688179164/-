@@ -73,12 +73,13 @@ python3 -m http.server 8080
 7. **当日已处理待报销**：顶部独立显示栏汇总今天从「待报销」流转为「已报销」的金额与笔数，并列出最近几笔处理记录；点击「导出本月日报」可导出当月每日汇总与逐笔处理明细（含时间）的 Excel。
 8. **发票追踪**：自动从「已报销」中抓取「有发票」的记录，生成未取得发票清单，展示申请人、申请时间、报销内容、凭证附件与总金额；点击「已取得发票」后自动归档到已取得发票栏。支持按申请人和时间范围筛选。
 9. **底部金额**：展示当前筛选范围的待报销总额、已报销总额与已补充附件金额。
-10. **统计与导出**：右上角导出栏可选择时间范围（今天 / 本周 / 本月 / 全部或自定义），生成详细统计报告，并导出 5 个工作表的 Excel：
+10. **统计与导出**：右上角导出栏可选择时间范围（今天 / 本周 / 本月 / 全部或自定义），生成详细统计报告，并导出包含 5 个基础工作表的 Excel：
     - 报销明细（部门、报销分类、时间、申请人员、内容、报销状态、报销金额、是否有发票、高额配件成本属性、附件）
     - 部门分类统计（含每个部门的小计）
     - 员工报销统计
     - 总览报告
     - 附件清单
+    当时间范围内存在附件时，会额外生成「附件预览」工作表：图片凭证以缩略图直接嵌入「报销明细」的附件列，点击蓝色的「点击查看 N 个附件」可跳转到附件预览页查看全尺寸图片；文档类附件在预览页列出文件名、大小与说明，「附件清单」中也提供逐条「查看」跳转。
 11. **月度财务报表**：在统计报告右上角点击「月度财务报表」，可按月生成与车房现金流量表图片同版式的预览表格，并导出带合并单元格、边框、金额格式的 Excel。成本按报销分类自动映射到「维修、保养、钣喷、洗车、美容、贴膜、改装、门店运维、线上运营」业务列与图片中的成本项目行；统计口径为当月已报销成本（含已补充附件）。
 12. **本地持久化**：任务写入 `localStorage`，附件二进制写入 `IndexedDB`，刷新不丢失；首次打开预置 4 条可编辑示例任务。
 
@@ -199,7 +200,9 @@ goodwork-garage/
 │       └── reimburse.js     # 二级报销工作台 / 本地存储 / D 盘授权 / Excel
 └── vendor/
     ├── three/               # Three.js r164 及必要 addons（本地化）
-    └── xlsx.full.min.js     # SheetJS，用于 Excel 导出（按需加载）
+    ├── xlsx.full.min.js     # SheetJS / xlsx-js-style，用于月度报表与日报导出（按需加载）
+    ├── exceljs.min.js       # ExcelJS，用于带嵌入图片与附件预览的统计 Excel（按需加载）
+    └── fflate.min.js        # 轻量 ZIP 处理，用于写入附件预览内部跳转（按需加载）
 ```
 
 ### 渲染与性能
@@ -249,7 +252,8 @@ URL 参数：
 - 报销工作台界面与逻辑：`src/ui/reimburse.js`；样式：`reimburse.css`。
 - 本地数据键：任务 `goodwork.reimburse.tasks.v3`，设置 `goodwork.reimburse.settings.v3`，已处理待报销事件 `goodwork.reimburse.processed.v1`；附件在 IndexedDB `goodwork-reimburse` 的 `attachments` 表。
 - 发票追踪状态保存在任务的 `invoiceReceived` / `invoiceReceivedAt` 字段；折叠状态保存在 `collapsed` 字段。
-- Excel 导出使用按需加载的本地 `vendor/xlsx.full.min.js`（xlsx-js-style，支持单元格样式），不依赖 CDN。
+- 统计 Excel 使用按需加载的本地 `vendor/exceljs.min.js` 生成；导出时会把图片附件转成缩略图嵌入附件列，并追加「附件预览」工作表。`vendor/fflate.min.js` 用于在 XLSX 包内写入内部跳转链接。
+- 月度财务报表与本月日报使用按需加载的本地 `vendor/xlsx.full.min.js`（xlsx-js-style），不依赖 CDN。
 
 ### 修改招牌 / 文案
 
@@ -292,4 +296,4 @@ URL 参数：
 
 ## 7. 许可
 
-代码可自由用于学习、展示与二次创作；Three.js 遵循其 MIT License，SheetJS（`vendor/xlsx.full.min.js`）遵循 Apache-2.0 License。
+代码可自由用于学习、展示与二次创作；Three.js 遵循其 MIT License，SheetJS（`vendor/xlsx.full.min.js`）遵循 Apache-2.0 License，ExcelJS（`vendor/exceljs.min.js`）与 fflate（`vendor/fflate.min.js`）遵循 MIT License。
