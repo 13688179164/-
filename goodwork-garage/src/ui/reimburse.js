@@ -7,7 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   createSampleTasks, BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261123v914';
-import { CloudSync } from '../core/cloudSync.js?v=20261123v915';
+import { CloudSync } from '../core/cloudSync.js?v=20261123v916';
 
 /* ------------------------------------------------------------------ */
 /* 基础工具                                                            */
@@ -2093,6 +2093,9 @@ export class ReimburseBoard {
       for (const a of task.attachments) await deleteAttachmentBlob(a.id);
       this.tasks = this.tasks.filter((t) => t.id !== id);
       this.persistTasks();
+      // 🔧 同步删除到云端（含墓碑），防止被其他设备或轮询重新拉回来
+      try { await this.cloud?.recordDeletion(id); }
+      catch (e) { console.warn('[reimburse] 云端删除失败:', e?.message); }
     }
     this.closeConfirm(true);
     this.renderAll({ fromRects: before });

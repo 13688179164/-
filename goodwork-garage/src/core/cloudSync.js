@@ -260,6 +260,8 @@ export class CloudSync {
     this.lastPollAt = null;
     this.lastRemoteUpdatedAt = '';
     this.errorDetail = '';
+    // 🔧 删除墓碑：记录被删除的任务 id，防止它被其他设备/云端重新"复活"
+    this.deletedIds = new Set(Array.isArray(this.settings.deletedIds) ? this.settings.deletedIds : []);
 
     // 🛠️ 调试：挂到 window 上，方便 Console 手动测
     if (typeof window !== 'undefined') {
@@ -488,6 +490,8 @@ export class CloudSync {
   }
 
   async connectData(mode = 'auto') {
+    // 🔧 先同步删除墓碑，避免已被删除的记录又被拉回来
+    await this.loadTombstonesFromCloud();
     let rows = [];
     try {
       rows = await withTimeout(
@@ -554,7 +558,7 @@ export class CloudSync {
         } catch { /* noop */ }
       }
       return t;
-    });
+    }).filter((t) => !this.deletedIds.has(t.id));
 
     const remoteProcessed = processed.map((r) => ({
       taskId: r.task_id,
@@ -567,7 +571,9 @@ export class CloudSync {
     }));
 
     const local = this.getState();
-    const localHasData = (local.tasks?.length || 0) + (local.processedEvents?.length || 0) > 0;
+    // 🔧 墓碑过滤：本地已被删除的任务不再参与合并/推送
+    const localTasks = (local.tasks || []).filter((t) => !this.deletedIds.has(t.id));
+    const localHasData = localTasks.length + (local.processedEvents?.length || 0) > 0;
 
     if (mode === 'push') {
       await this.pushNow({ force: true, silent: true, _internal: true });
@@ -583,7 +589,6 @@ export class CloudSync {
     // 规则：按 id 合并；同 id 取 updatedAt 更新的那条；本地独有（云端没有）的保留
     // 这样 pushNow 失败也不会让用户的数据被云端旧数据覆盖
 
-    const localTasks = local.tasks || [];
     const localProc = local.processedEvents || [];
 
     if (!localHasData && remoteTasks.length > 0) {
@@ -670,6 +675,62 @@ export class CloudSync {
     }, PUSH_DEBOUNCE_MS);
   }
 
+  // ========== 删除墓碑（多设备删除同步）==========
+
+  saveTombstones() {
+    this.settings.deletedIds = [...this.deletedIds].slice(-2000);
+    this.saveSettings();
+  }
+
+  async loadTombstonesFromCloud() {
+    try {
+      const rows = await pgRequest('GET', this.envId, 'goodwork_meta', {
+        select: 'value', filter: { key: 'eq.deleted_ids' }, limit: 1,
+      });
+      const row = Array.isArray(rows) ? rows[0] : null;
+      if (!row || !row.value) return false;
+      const ids = JSON.parse(row.value);
+      if (!Array.isArray(ids)) return false;
+      let changed = false;
+      for (const id of ids) {
+        if (id && !this.deletedIds.has(id)) { this.deletedIds.add(id); changed = true; }
+      }
+      if (changed) this.saveTombstones();
+      return changed;
+    } catch (e) { /* meta 表不存在时忽略 */ return false; }
+  }
+
+  async pushTombstones() {
+    try {
+      await pgRequest('POST', this.envId, 'goodwork_meta', {
+        body: [{ key: 'deleted_ids', value: JSON.stringify([...this.deletedIds]), updated_at: nowIso() }],
+        prefer: 'resolution=merge-duplicates',
+      });
+    } catch (e) { console.warn('[cloudSync] 写入删除墓碑失败:', e?.message); }
+  }
+
+  /** 删除一条报销：本地立即移除 + 云端删行 + 写墓碑，防止其他设备再推回来 */
+  async recordDeletion(id) {
+    if (!id) return;
+    this.deletedIds.add(id);
+    this.saveTombstones();
+    try {
+      const st = this.getState();
+      const tasks = (st.tasks || []).filter((t) => t.id !== id);
+      this.applying = true;
+      try { this.applyState({ tasks, processedEvents: st.processedEvents || [] }, { source: 'cloud', silent: true }); }
+      finally { this.applying = false; }
+    } catch { /* noop */ }
+    if (!this.connected) return;
+    try {
+      await pgRequest('DELETE', this.envId, 'goodwork_tasks', { filter: { id: `eq.${id}` } });
+    } catch (e) { console.warn('[cloudSync] 删除云端任务失败:', e?.message); }
+    try {
+      await pgRequest('DELETE', this.envId, 'goodwork_attachments', { filter: { task_id: `eq.${id}` } });
+    } catch { /* 附件表可能为空 */ }
+    await this.pushTombstones();
+  }
+
   // ========== 上传（本地 → PG）==========
 
   async pushNow({ force = false, silent = false, _internal = false } = {}) {
@@ -705,7 +766,8 @@ export class CloudSync {
       } catch (e) {
         console.warn('[cloudSync] push 前拉取云端失败，跳过合并:', e?.message);
       }
-      const finalTasks = mergeByUpdatedAt(state.tasks || [], remoteTasks);
+      const finalTasks = mergeByUpdatedAt(state.tasks || [], remoteTasks)
+        .filter((t) => !this.deletedIds.has(t.id));
 
       // --- 1. upsert 所有 tasks（每条用它自己的 updatedAt，保持不变）---
       const taskRows = finalTasks.map((t) => this.taskToRow(t, t.updatedAt || now));
@@ -866,9 +928,15 @@ export class CloudSync {
         limit: 2000,
       });
 
-      const remoteAllTasks = rows.map((r) => this.rowToTask(r));
+      // 🔧 同步删除墓碑：其他设备的删除要传到本机
+      await this.loadTombstonesFromCloud();
+
+      const remoteAllTasks = rows.map((r) => this.rowToTask(r))
+        .filter((t) => !this.deletedIds.has(t.id));
       const local = this.getState();
-      const localById = new Map((local.tasks || []).map((t) => [t.id, t]));
+      const localTasks = (local.tasks || []).filter((t) => !this.deletedIds.has(t.id));
+      const tombstoneChanged = localTasks.length !== (local.tasks || []).length;
+      const localById = new Map(localTasks.map((t) => [t.id, t]));
 
       // 判断云端是否有"更新的/本地没有的"数据
       const hasNewRemoteTask = remoteAllTasks.some((rt) => {
@@ -886,6 +954,15 @@ export class CloudSync {
 
       // 如果云端没有新数据，只是本地 dirty 了（用户在别的设备改了），触发 push
       if (!hasNewRemote) {
+        // 有墓碑命中 → 本地也要移除这些已被删除的记录
+        if (tombstoneChanged) {
+          this.applying = true;
+          try {
+            this.applyState({ tasks: localTasks, processedEvents: local.processedEvents || [] }, { source: 'cloud', silent: true });
+          } finally {
+            this.applying = false;
+          }
+        }
         // 检查有没有本地还没推上去的新数据
         if (this.dirty) {
           await this.pushNow({ silent: true });
@@ -906,7 +983,7 @@ export class CloudSync {
         createdAt: r.created_at,
       }));
 
-      const mergedTasks = mergeByUpdatedAt(local.tasks || [], remoteIncrementalTasks);
+      const mergedTasks = mergeByUpdatedAt(localTasks, remoteIncrementalTasks);
       const mergedProc = mergeByUpdatedAt(local.processedEvents || [], remoteIncrementalProc);
 
       console.log('[cloudSync] poll merge:',
@@ -924,10 +1001,10 @@ export class CloudSync {
 
       // 更新 lastRemoteUpdatedAt 用合并后最新的那条
       const allUpdated = [
-        ...(local.tasks || []).map(t => t.updatedAt || ''),
+        ...localTasks.map(t => t.updatedAt || ''),
         ...remoteIncrementalTasks.map(t => t.updatedAt || ''),
       ].filter(Boolean);
-      this.lastRemoteUpdatedAt = allUpdated.length ? allUpdated.reduce((a, b) => a > b ? a : b) : since;
+      this.lastRemoteUpdatedAt = allUpdated.length ? allUpdated.reduce((a, b) => a > b ? a : b) : '';
       this.lastPollAt = Date.now();
       this.settings.lastSyncAt = nowIso();
       this.saveSettings();
