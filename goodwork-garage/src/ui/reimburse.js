@@ -804,6 +804,7 @@ export class ReimburseBoard {
                 <button type="button" class="rb-btn ghost" data-rb="cloud-register" id="rbCloudRegisterBtn">${ICON.plus}<span>注册工作区账号</span></button>
                 <button type="button" class="rb-btn ghost" data-rb="cloud-logout" id="rbCloudLogoutBtn">退出登录</button>
               </div>
+              <p class="rb-cloud-hint">首次使用请先点击「注册工作区账号」创建团队账号；之后所有设备都用同一账号登录。</p>
               <div class="rb-cloud-message" id="rbCloudMessage"></div>
             </section>
 
@@ -2913,11 +2914,20 @@ export class ReimburseBoard {
   }
 
   showCloudError(message) {
+    if (this.cloud) this.cloud.errorDetail = message;
     if (this.el.cloudMessage) {
       this.el.cloudMessage.textContent = message;
       this.el.cloudMessage.classList.add('is-error');
     }
     this.toast('云同步失败', message);
+  }
+
+  clearCloudError() {
+    if (this.cloud) this.cloud.errorDetail = '';
+    if (this.el.cloudMessage) {
+      this.el.cloudMessage.textContent = '';
+      this.el.cloudMessage.classList.remove('is-error');
+    }
   }
 
   async cloudLogin() {
@@ -2929,6 +2939,7 @@ export class ReimburseBoard {
       this.showCloudError('请填写环境 ID、工作区账号邮箱和密码。');
       return;
     }
+    this.clearCloudError();
     this.setCloudBusy(true);
     try {
       await this.cloud.login({ envId, email, password, autoSync: this.el.cloudAuto.checked });
@@ -2950,6 +2961,7 @@ export class ReimburseBoard {
       this.showCloudError('请填写环境 ID、工作区账号邮箱和密码。');
       return;
     }
+    this.clearCloudError();
     this.setCloudBusy(true);
     try {
       await this.cloud.register({ envId, email, password, autoSync: this.el.cloudAuto.checked });

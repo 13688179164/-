@@ -27,6 +27,16 @@ function makeDeviceId() {
   return `dev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    Promise.resolve(promise).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
+
 export class CloudSync {
   constructor({
     getState,
@@ -114,7 +124,11 @@ export class CloudSync {
     }
     try {
       await this.ensureApp();
-      const loginState = await this.auth.getLoginState();
+      const loginState = await withTimeout(
+        this.auth.getLoginState(),
+        20000,
+        '恢复云开发登录态超时，请检查网络或重新登录。'
+      );
       if (loginState?.user) {
         this.connected = true;
         await this.afterLogin({ auto: this.autoSync, silent: true });
@@ -178,9 +192,16 @@ export class CloudSync {
     this.saveSettings();
     this.emit('connecting');
     try {
-      await this.auth.signInWithEmailAndPassword(email, password);
+      await withTimeout(
+        this.auth.signInWithEmailAndPassword(email, password),
+        30000,
+        '登录云开发超时，请检查网络、安全域名和登录方式配置。'
+      );
     } catch (err) {
-      throw new Error(this.friendlyError(err));
+      const message = this.friendlyError(err);
+      this.connected = false;
+      this.emit('error', { message });
+      throw new Error(message);
     }
     this.connected = true;
     await this.afterLogin({ auto: this.autoSync });
@@ -197,11 +218,28 @@ export class CloudSync {
     this.saveSettings();
     this.emit('connecting');
     try {
-      await this.auth.signUpWithEmailAndPassword(email, password);
-      const state = await this.auth.getLoginState();
-      if (!state?.user) await this.auth.signInWithEmailAndPassword(email, password);
+      await withTimeout(
+        this.auth.signUpWithEmailAndPassword(email, password),
+        30000,
+        '注册云开发账号超时，请检查网络、安全域名和登录方式配置。'
+      );
+      const state = await withTimeout(
+        this.auth.getLoginState(),
+        20000,
+        '检查注册登录态超时，请稍后重试。'
+      );
+      if (!state?.user) {
+        await withTimeout(
+          this.auth.signInWithEmailAndPassword(email, password),
+          30000,
+          '注册后自动登录超时，请手动点击登录。'
+        );
+      }
     } catch (err) {
-      throw new Error(this.friendlyError(err));
+      const message = this.friendlyError(err);
+      this.connected = false;
+      this.emit('error', { message });
+      throw new Error(message);
     }
     this.connected = true;
     await this.afterLogin({ auto: this.autoSync });
@@ -220,11 +258,18 @@ export class CloudSync {
 
   async afterLogin({ auto = true, silent = false } = {}) {
     this.emit('connecting');
-    await this.connectData(auto ? 'auto' : 'pull');
-    if (this.autoSync) this.startWatch();
-    this.emit('connected');
-    if (!silent) this.onToast('云同步已连接', `团队工作区 · ${this.email}`, 'ok');
-    if (this.autoSync) this.syncAllAttachments({ silent: true });
+    try {
+      await this.connectData(auto ? 'auto' : 'pull');
+      if (this.autoSync) this.startWatch();
+      this.emit('connected');
+      if (!silent) this.onToast('云同步已连接', `团队工作区 · ${this.email}`, 'ok');
+      if (this.autoSync) this.syncAllAttachments({ silent: true });
+    } catch (err) {
+      const message = this.friendlyError(err);
+      this.connected = false;
+      this.emit('error', { message });
+      throw new Error(message);
+    }
   }
 
   docRef() {
@@ -232,7 +277,11 @@ export class CloudSync {
   }
 
   async fetchCloudDoc() {
-    const res = await this.docRef().get();
+    const res = await withTimeout(
+      this.docRef().get(),
+      20000,
+      '读取云端工作区超时，请检查数据库集合与安全域名配置。'
+    );
     return Array.isArray(res.data) && res.data.length ? res.data[0] : null;
   }
 
@@ -337,15 +386,19 @@ export class CloudSync {
       const payload = this.sanitizeState(state);
       const rev = this.rev + 1;
       const updatedAt = nowIso();
-      await this.docRef().set({
-        schemaVersion: 1,
-        workspace: 'GOODWORK 古德車房',
-        state: payload,
-        rev,
-        updatedAt,
-        updatedBy: this.deviceId,
-        appVersion: 'v4',
-      });
+      await withTimeout(
+        this.docRef().set({
+          schemaVersion: 1,
+          workspace: 'GOODWORK 古德車房',
+          state: payload,
+          rev,
+          updatedAt,
+          updatedBy: this.deviceId,
+          appVersion: 'v4',
+        }),
+        20000,
+        '上传云端超时，请检查数据库权限与网络。'
+      );
       this.rev = rev;
       this.lastRemoteAt = updatedAt;
       this.settings.lastSyncAt = updatedAt;
@@ -443,14 +496,22 @@ export class CloudSync {
         type: meta.type || 'application/octet-stream',
       });
     }
-    const res = await this.app.uploadFile({ cloudPath, filePath: file });
+    const res = await withTimeout(
+      this.app.uploadFile({ cloudPath, filePath: file }),
+      120000,
+      '附件上传云端超时，请检查网络后重试。'
+    );
     if (!res?.fileID) throw new Error('云存储未返回 fileID。');
     return res.fileID;
   }
 
   async downloadAttachment(fileID) {
     if (!this.connected || !this.app) throw new Error('尚未连接云开发。');
-    const res = await this.app.getTempFileURL({ fileList: [fileID] });
+    const res = await withTimeout(
+      this.app.getTempFileURL({ fileList: [fileID] }),
+      30000,
+      '获取云端附件链接超时，请检查网络。'
+    );
     const item = res?.fileList?.find((x) => x.fileID === fileID) || res?.fileList?.[0];
     const tempUrl = item?.tempFileURL || item?.download_url;
     if (!tempUrl) throw new Error('无法获取云端附件链接。');
@@ -516,7 +577,20 @@ export class CloudSync {
 
   friendlyError(err) {
     const code = String(err?.code || err?.errCode || '');
-    const msg = `${code} ${err?.message || err?.errMsg || String(err || '未知错误')}`;
+    const detail = err?.error_description || err?.message || err?.errMsg || err?.error || '';
+    const msg = `${code} ${detail || String(err || '未知错误')}`;
+    if (/INVALID_USERNAME_OR_PASSWORD|invalid_username_or_password|用户名或密码不正确|INVALID_PASSWORD/i.test(msg)) {
+      return '账号或密码不正确。首次使用请先点击「注册工作区账号」；已有账号请检查邮箱和密码。';
+    }
+    if (/USER_NOT_EXIST|user_not_exist|用户不存在/i.test(msg)) {
+      return '该邮箱还没有注册工作区账号，请先点击「注册工作区账号」。';
+    }
+    if (/EMAIL_NOT_VERIFIED|email.*not.*verif|邮箱.*未验证/i.test(msg)) {
+      return '邮箱尚未验证，请先查收验证邮件并完成验证，再回来登录。';
+    }
+    if (/INVALID_EMAIL|invalid_email|邮箱格式/i.test(msg)) {
+      return '邮箱格式不正确，请填写有效邮箱。';
+    }
     if (/env.*(not.*exist|invalid)|环境.*(不存在|无效)/i.test(msg)) {
       return '云开发环境 ID 无效或不存在，请检查上方环境 ID。';
     }
