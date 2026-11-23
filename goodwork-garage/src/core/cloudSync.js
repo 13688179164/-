@@ -7,6 +7,7 @@ const DEVICE_KEY = 'goodwork.cloud.device.v1';
 const COLLECTION = 'goodwork_workspaces';
 const DOC_ID = 'team';
 const STORAGE_PREFIX = 'goodwork/team';
+const DEFAULT_ENV_ID = 'attractive-starfish-d0bp2e865971';
 
 function nowIso() {
   return new Date().toISOString();
@@ -43,11 +44,12 @@ export class CloudSync {
     this.onToast = onToast || (() => {});
 
     this.settings = readJson(SETTINGS_KEY, {
-      envId: '',
+      envId: DEFAULT_ENV_ID,
       email: '',
       autoSync: true,
       lastSyncAt: '',
     });
+    if (!this.settings.envId) this.settings.envId = DEFAULT_ENV_ID;
     this.autoSync = this.settings.autoSync !== false;
     this.deviceId = localStorage.getItem(DEVICE_KEY) || makeDeviceId();
     try { localStorage.setItem(DEVICE_KEY, this.deviceId); } catch { /* noop */ }
@@ -513,11 +515,18 @@ export class CloudSync {
   }
 
   friendlyError(err) {
-    const msg = err?.message || err?.errMsg || String(err || '未知错误');
-    if (/collection.*not.*exist|集合.*不存在/i.test(msg)) {
+    const code = String(err?.code || err?.errCode || '');
+    const msg = `${code} ${err?.message || err?.errMsg || String(err || '未知错误')}`;
+    if (/env.*(not.*exist|invalid)|环境.*(不存在|无效)/i.test(msg)) {
+      return '云开发环境 ID 无效或不存在，请检查上方环境 ID。';
+    }
+    if (/collection.*not.*exist|集合.*不存在|DATABASE_COLLECTION_NOT_EXIST/i.test(msg)) {
       return `数据库集合 ${COLLECTION} 不存在，请在云开发控制台创建并设置权限。`;
     }
-    if (/domain|origin|cors|安全域名/i.test(msg)) {
+    if (/login.*(type|method|provider).*(not|disabled|enable)|登录方式.*(未|不)|邮箱登录.*(未|不)/i.test(msg)) {
+      return '邮箱密码登录未开启，请在云开发控制台「登录授权」中开启。';
+    }
+    if (/domain|origin|cors|安全域名|域名.*(白名单|未)/i.test(msg)) {
       return '当前站点未加入云开发安全域名，请在控制台添加本站域名。';
     }
     return msg;

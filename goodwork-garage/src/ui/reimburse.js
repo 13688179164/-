@@ -833,7 +833,7 @@ export class ReimburseBoard {
                 <div><h3>云开发配置清单</h3><p>首次使用需要先在腾讯云开发控制台完成以下配置。</p></div>
               </div>
               <ol class="rb-cloud-steps">
-                <li>创建云开发环境，复制环境 ID 填入上方。</li>
+                <li>环境 ID 已预填为 <code>attractive-starfish-d0bp2e865971</code>；如使用其他环境，直接替换上方 ID。</li>
                 <li>开启「邮箱密码登录」；如控制台启用了邮箱验证，请先完成账号验证或由管理员创建账号。</li>
                 <li>创建数据库集合 <code>goodwork_workspaces</code>，权限选择「仅创建者可读写」。</li>
                 <li>开启云存储；附件会保存到 <code>goodwork/team/</code>。</li>
