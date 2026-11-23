@@ -81,7 +81,8 @@ python3 -m http.server 8080
     - 附件清单
     当时间范围内存在附件时，会额外生成「附件预览」工作表：图片凭证以缩略图直接嵌入「报销明细」的附件列，点击蓝色的「点击查看 N 个附件」可跳转到附件预览页查看全尺寸图片；文档类附件在预览页列出文件名、大小与说明，「附件清单」中也提供逐条「查看」跳转。
 11. **月度财务报表**：在统计报告右上角点击「月度财务报表」，可按月生成与车房现金流量表图片同版式的预览表格，并导出带合并单元格、边框、金额格式的 Excel。成本按报销分类自动映射到「维修、保养、钣喷、洗车、美容、贴膜、改装、门店运维、线上运营」业务列与图片中的成本项目行；统计口径为当月已报销成本（含已补充附件）。
-12. **本地持久化**：任务写入 `localStorage`，附件二进制写入 `IndexedDB`，刷新不丢失；首次打开预置 4 条可编辑示例任务。
+12. **腾讯云开发多设备同步**：顶部「云同步」入口可配置云开发环境 ID 与团队工作区账号；登录后任务、报销状态、发票追踪、已处理日报和附件会同步到 CloudBase。修改后约 1.5 秒自动上传，并实时监听其他设备的变化；附件上传到云存储，其他设备按需下载。未连接或离线时仍以本机数据继续工作。
+13. **本地持久化**：任务写入 `localStorage`，附件二进制写入 `IndexedDB`，刷新不丢失；首次打开预置 4 条可编辑示例任务。
 
 #### 关于自动写入 D:\车房凭证
 
@@ -95,6 +96,28 @@ python3 -m http.server 8080
 - 刷新后如浏览器要求重新授权，导出栏会显示「恢复授权」，点击一次即可继续自动写入。
 
 > 该授权必须由用户主动选择目录一次；这是浏览器的安全限制，而非工作台逻辑缺失。部署在 HTTPS 的页面上使用 Chrome / Edge 可获得完整体验。
+
+#### 关于腾讯云开发多设备同步
+
+工作台通过 **腾讯云开发 CloudBase Web SDK** 实现团队共享工作区：
+
+- 顶部「云同步」→ 填写云开发环境 ID、团队工作区账号邮箱与密码，登录后开始同步。
+- 所有设备使用同一个工作区账号，因此共享同一份台账与附件；账号密码不会写入代码或 `localStorage`，只保存 SDK 的登录态。
+- 云端数据位置：数据库集合 `goodwork_workspaces` 的 `team` 文档，包含任务、状态、发票追踪、已处理事件；附件在云存储 `goodwork/team/`。
+- 实时同步：本地修改约 1.5 秒后自动上传；通过数据库 `watch` 监听其他设备的变化。关闭「自动实时同步」后，可使用「上传本机到云端 / 从云端拉取 / 同步附件」手动控制。
+- 冲突策略：按 `rev` 与 `updatedAt` 做最近写入优先；其他设备的新版本会先应用到本机，避免直接覆盖。团队多人同时编辑同一条记录时仍可能出现后写覆盖，请避免同时修改同一笔报销。
+- 附件：新附件保存后自动上传；其他设备在下载、导出 Excel 或写入 D 盘时按需从云端下载并缓存到 IndexedDB。D 盘写入状态属于本机，不会同步给其他设备。
+- 离线：云连接失败时工作台继续使用本机数据，恢复网络后可手动上传或拉取。
+
+**首次配置清单**
+
+1. 在腾讯云开发控制台创建环境，复制环境 ID。
+2. 开启「邮箱密码登录」；如启用了邮箱验证，先完成账号验证或由管理员创建团队账号。
+3. 创建数据库集合 `goodwork_workspaces`，权限选择「仅创建者可读写」。
+4. 开启云存储；附件会保存到 `goodwork/team/`。
+5. 在「安全域名」中加入当前站点域名（部署后的 `*.traesite.cn` 域名，或本地开发时的 `localhost:5173`）。
+
+> 团队共享模式使用一个共享账号，适合小型门店财务工作区；不要把账号密码发送给工作区以外的人。当前使用单个工作区文档保存全部台账，适合数百到数千条记录规模；如果历史数据长期增长到很大，可再按月份拆分云端文档。
 
 ---
 
@@ -179,6 +202,7 @@ goodwork-garage/
 │   ├── core/
 │   │   ├── config.js        # 季节调色板、相机、员工、票据、参数
 │   │   ├── reimburseConfig.js # 报销部门 / 分类 / 示例任务
+│   │   ├── cloudSync.js     # 腾讯云开发同步 / 登录 / 实时监听 / 附件云存储
 │   │   ├── archive.js       # 22 类交互档案文案
 │   │   ├── textures.js      # 全部程序化 CanvasTexture
 │   │   └── utils.js         # 噪声、随机、缓动、补间、投影
@@ -202,7 +226,8 @@ goodwork-garage/
     ├── three/               # Three.js r164 及必要 addons（本地化）
     ├── xlsx.full.min.js     # SheetJS / xlsx-js-style，用于月度报表与日报导出（按需加载）
     ├── exceljs.min.js       # ExcelJS，用于带嵌入图片与附件预览的统计 Excel（按需加载）
-    └── fflate.min.js        # 轻量 ZIP 处理，用于写入附件预览内部跳转（按需加载）
+    ├── fflate.min.js        # 轻量 ZIP 处理，用于写入附件预览内部跳转（按需加载）
+    └── cloudbase.full.js    # 腾讯云开发 Web SDK，多设备同步（按需加载）
 ```
 
 ### 渲染与性能
@@ -250,8 +275,9 @@ URL 参数：
 - 月度财务报表的业务单元、成本项目行与映射规则：同文件的 `BUSINESS_UNITS` / `MONTHLY_COST_ROWS` / `mapCostToStatement`。
 - 首次打开的示例任务：同文件的 `createSampleTasks()`（只会在本地没有任务数据时生成）。
 - 报销工作台界面与逻辑：`src/ui/reimburse.js`；样式：`reimburse.css`。
-- 本地数据键：任务 `goodwork.reimburse.tasks.v3`，设置 `goodwork.reimburse.settings.v3`，已处理待报销事件 `goodwork.reimburse.processed.v1`；附件在 IndexedDB `goodwork-reimburse` 的 `attachments` 表。
-- 发票追踪状态保存在任务的 `invoiceReceived` / `invoiceReceivedAt` 字段；折叠状态保存在 `collapsed` 字段。
+- 本地数据键：任务 `goodwork.reimburse.tasks.v3`，设置 `goodwork.reimburse.settings.v3`，已处理待报销事件 `goodwork.reimburse.processed.v1`，云同步设置 `goodwork.cloud.settings.v1`，设备标识 `goodwork.cloud.device.v1`；附件在 IndexedDB `goodwork-reimburse` 的 `attachments` 表。
+- 云同步逻辑：`src/core/cloudSync.js`；数据库集合 `goodwork_workspaces`，工作区文档 `team`，附件目录 `goodwork/team/`。
+- 发票追踪状态保存在任务的 `invoiceReceived` / `invoiceReceivedAt` 字段；折叠状态保存在 `collapsed` 字段；附件云文件 ID 保存在 `attachment.cloudFileId`。
 - 统计 Excel 使用按需加载的本地 `vendor/exceljs.min.js` 生成；导出时会把图片附件转成缩略图嵌入附件列，并追加「附件预览」工作表。`vendor/fflate.min.js` 用于在 XLSX 包内写入内部跳转链接。
 - 月度财务报表与本月日报使用按需加载的本地 `vendor/xlsx.full.min.js`（xlsx-js-style），不依赖 CDN。
 
@@ -284,16 +310,16 @@ URL 参数：
 
 ## 6. 已知说明
 
-- 报销数据完全保存在本机浏览器：任务在 `localStorage`，附件在 `IndexedDB`，刷新或重启浏览器不会丢失；清理站点数据会删除这些记录。项目没有后端，也不会上传业务数据。
-- 数据按浏览器 / 设备隔离，换浏览器或换电脑不会自动同步；可使用 Excel 导出做备份。
-- 3D 场景中的票据箱 / 审批终端与 NPC 任务链作为空间叙事保留；二级报销工作台的数据以本地看板为准。
+- 默认情况下报销数据保存在本机浏览器：任务在 `localStorage`，附件在 `IndexedDB`，刷新或重启浏览器不会丢失；清理站点数据会删除这些记录。启用云同步并登录后，任务、状态与附件会上传到用户自己配置的腾讯云开发环境。
+- 未启用云同步时，数据按浏览器 / 设备隔离；启用后，使用同一工作区账号的设备共享同一份台账与附件。可使用 Excel 导出做额外备份。
+- 3D 场景中的票据箱 / 审批终端与 NPC 任务链作为空间叙事保留；二级报销工作台的数据以看板与云同步结果为准。
 - 自动写入 `D:\车房凭证` 依赖浏览器 File System Access API。首次必须由用户主动选择一次 D 盘目录；之后在该授权有效期内自动写入，权限过期时点击「恢复授权」即可。Firefox 等不支持该 API 的浏览器会将附件保存在 IndexedDB 并提供下载。
 - 中文排版依赖系统中文字体（Noto Sans/Serif CJK、苹方、微软雅黑等）；无中文字体时浏览器会回退到默认字体。
 - 声音需要用户首次交互后才能播放；不交互时保持静音是浏览器策略。
-- 本项目为前端演示，不包含真实账号、票据 OCR、数据库或外部审批服务。
+- 云同步需要用户自行创建腾讯云开发环境并完成安全域名、登录方式、数据库集合与云存储配置；应用内不包含环境 ID 或账号密码。云开发的用量与费用由对应的腾讯云账号承担。
 
 ---
 
 ## 7. 许可
 
-代码可自由用于学习、展示与二次创作；Three.js 遵循其 MIT License，SheetJS（`vendor/xlsx.full.min.js`）遵循 Apache-2.0 License，ExcelJS（`vendor/exceljs.min.js`）与 fflate（`vendor/fflate.min.js`）遵循 MIT License。
+代码可自由用于学习、展示与二次创作；Three.js 遵循其 MIT License，SheetJS（`vendor/xlsx.full.min.js`）遵循 Apache-2.0 License，ExcelJS（`vendor/exceljs.min.js`）与 fflate（`vendor/fflate.min.js`）遵循 MIT License，腾讯云开发 Web SDK（`vendor/cloudbase.full.js`）遵循 Apache-2.0 License。

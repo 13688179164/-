@@ -1690,3 +1690,173 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
   .rb-filter-field select, .rb-filter-field input, .rb-filter-chip { height: 26px; }
   .rb-filter-field > span { font-size: 6px; }
 }
+
+/* =========================================================
+   腾讯云开发同步
+   ========================================================= */
+
+.rb-cloud-btn {
+  position: relative;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid rgba(159, 207, 174, 0.32);
+  border-radius: 7px;
+  background: rgba(159, 207, 174, 0.06);
+  color: #c7e3d4;
+  font-family: var(--rb-sans);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.3s var(--rb-ease);
+  white-space: nowrap;
+}
+.rb-cloud-btn svg { width: 15px; height: 15px; }
+.rb-cloud-btn:hover { border-color: rgba(159, 207, 174, 0.58); background: rgba(159, 207, 174, 0.12); color: #e3f5ea; transform: translateY(-1px); }
+.rb-cloud-btn.is-connected { border-color: rgba(159, 207, 174, 0.55); background: rgba(159, 207, 174, 0.1); color: #d9f0e2; }
+.rb-cloud-btn.is-error { border-color: rgba(224, 138, 118, 0.45); background: rgba(224, 138, 118, 0.07); color: #f0b3a4; }
+.rb-cloud-dot {
+  width: 6px;
+  height: 6px;
+  margin-left: 1px;
+  border-radius: 50%;
+  background: #7b8a83;
+  box-shadow: 0 0 0 rgba(159, 207, 174, 0);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+  flex: 0 0 auto;
+}
+.rb-cloud-btn.is-connected .rb-cloud-dot { background: var(--rb-green); box-shadow: 0 0 8px rgba(159, 207, 174, 0.75); }
+.rb-cloud-btn.is-syncing .rb-cloud-dot { background: var(--rb-gold); animation: rbPulse 1.1s ease-in-out infinite; }
+.rb-cloud-btn.is-error .rb-cloud-dot { background: #e08a76; box-shadow: 0 0 8px rgba(224, 138, 118, 0.7); }
+.rb-cloud-btn.is-warn .rb-cloud-dot { background: #d8b477; }
+
+.rb-cloud-modal { z-index: 44; }
+
+.rb-cloud-sheet {
+  width: min(980px, 94vw);
+  height: min(900px, 92vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(159, 207, 174, 0.24);
+  border-radius: 10px;
+  background:
+    radial-gradient(ellipse 80% 50% at 85% 0%, rgba(159, 207, 174, 0.06), transparent 60%),
+    linear-gradient(160deg, rgba(10, 16, 27, 0.99), rgba(5, 9, 16, 0.995));
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.72);
+  transform: translateY(14px) scale(0.99);
+  transition: transform 0.45s var(--rb-ease);
+  overflow: hidden;
+}
+.rb-modal.is-open .rb-cloud-sheet { transform: none; }
+.rb-cloud-sheet .rb-report-head { padding: 22px 30px 16px; }
+
+.rb-cloud-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 30px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 190, 230, 0.18) transparent;
+}
+.rb-cloud-body::-webkit-scrollbar { width: 4px; }
+.rb-cloud-body::-webkit-scrollbar-thumb { background: rgba(160, 190, 230, 0.18); border-radius: 4px; }
+
+.rb-cloud-section { padding: 18px 0 20px; border-bottom: 1px solid var(--rb-line); }
+.rb-cloud-section:last-child { border-bottom: 0; }
+.rb-cloud-section-head { display: flex; gap: 12px; margin-bottom: 13px; }
+.rb-cloud-section-head > span {
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(216, 180, 119, 0.35);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--rb-serif);
+  font-size: 9px;
+  color: var(--rb-gold);
+  flex: 0 0 auto;
+}
+.rb-cloud-section-head h3 { margin: 0; font-family: var(--rb-serif); font-size: 16px; font-weight: 500; letter-spacing: 0.06em; color: #eee4d2; }
+.rb-cloud-section-head p { margin: 4px 0 0; font-size: 8.5px; line-height: 1.65; color: var(--rb-muted-2); }
+
+.rb-cloud-field { margin-top: 10px; }
+.rb-cloud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.rb-cloud-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+.rb-cloud-actions .rb-btn { min-height: 34px; }
+
+.rb-cloud-message {
+  display: none;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 2px solid #c98061;
+  background: rgba(201, 128, 97, 0.08);
+  font-size: 8.5px;
+  line-height: 1.7;
+  color: #e2b39e;
+}
+.rb-cloud-message.is-error { display: block; }
+
+.rb-cloud-status {
+  padding: 5px 9px;
+  border: 1px solid var(--rb-line);
+  border-radius: 100px;
+  font-size: 7.5px;
+  letter-spacing: 0.06em;
+  color: var(--rb-muted);
+  white-space: nowrap;
+}
+.rb-cloud-status.is-connected { color: var(--rb-green); border-color: rgba(159, 207, 174, 0.35); background: rgba(159, 207, 174, 0.06); }
+.rb-cloud-status.is-error { color: #f0b3a4; border-color: rgba(224, 138, 118, 0.4); }
+.rb-cloud-status.is-connecting,
+.rb-cloud-status.is-syncing { color: var(--rb-gold); border-color: rgba(216, 180, 119, 0.35); }
+
+.rb-cloud-sync-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--rb-line);
+  border-radius: 7px;
+  background: rgba(5, 9, 16, 0.35);
+}
+.rb-cloud-switch { display: flex; align-items: center; gap: 8px; font-size: 9px; color: #c9d5e3; cursor: pointer; }
+.rb-cloud-switch input { width: 15px; height: 15px; accent-color: var(--rb-green); }
+.rb-cloud-last { font-size: 8px; color: var(--rb-muted-2); }
+.rb-cloud-hint { margin: 10px 0 0; font-size: 8px; line-height: 1.7; color: var(--rb-muted-2); }
+
+.rb-cloud-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 7px; font-size: 9px; line-height: 1.7; color: #b9c6d6; }
+.rb-cloud-steps code {
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(160, 190, 230, 0.08);
+  color: #e2cfa9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+}
+
+.rb-cloud-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 30px 18px;
+  border-top: 1px solid var(--rb-line);
+}
+.rb-cloud-foot span { font-size: 8px; letter-spacing: 0.03em; color: var(--rb-muted-2); }
+
+@media (max-width: 700px) {
+  .rb-cloud-btn { width: 34px; justify-content: center; padding: 0; }
+  .rb-cloud-btn > span { display: none; }
+  .rb-cloud-dot { position: absolute; top: -4px; right: -4px; margin: 0; }
+  .rb-cloud-sheet { width: 100%; height: 100%; border-radius: 0; border: 0; }
+  .rb-cloud-sheet .rb-report-head { padding: 16px 16px 12px; }
+  .rb-cloud-body { padding: 0 16px 20px; }
+  .rb-cloud-grid { grid-template-columns: 1fr; }
+  .rb-cloud-foot { padding: 12px 16px 16px; }
+  .rb-cloud-foot span { display: none; }
+  .rb-cloud-actions .rb-btn { flex: 1 1 auto; }
+}

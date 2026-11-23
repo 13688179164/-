@@ -7,6 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   createSampleTasks, BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js';
+import { CloudSync } from '../core/cloudSync.js';
 
 /* ------------------------------------------------------------------ */
 /* 基础工具                                                            */
@@ -168,6 +169,7 @@ const ICON = {
   chevronRight: '<svg viewBox="0 0 24 24" fill="none"><path d="M9.5 6l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   chevronDown: '<svg viewBox="0 0 24 24" fill="none"><path d="M6 9.5l6 6 6-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   drop: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 4v10M8 10.5l4 4 4-4M6 19h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  cloud: '<svg viewBox="0 0 24 24" fill="none"><path d="M7.2 18h9.6a4.2 4.2 0 0 0 .6-8.36A6.1 6.1 0 0 0 6 8.9 4.7 4.7 0 0 0 7.2 18z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/><path d="M9.5 13.4l2.5 2.4 2.5-2.4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
 
 /* ------------------------------------------------------------------ */
@@ -275,6 +277,9 @@ export class ReimburseBoard {
     this.invoiceFilterEnd = '';
     this.statementOpen = false;
     this.statementMonth = currentMonthValue();
+    this.cloudOpen = false;
+    this.cloudBusy = false;
+    this.applyingCloud = false;
     this.previewUrl = null;
     this.folderHandle = null;
     this.folderStatus = 'checking';
@@ -286,6 +291,16 @@ export class ReimburseBoard {
     this._bind();
     this.renderAll({ animate: false });
     this.initFolder();
+    this.cloud = new CloudSync({
+      getState: () => this.getCloudState(),
+      applyState: (state, meta) => this.applyCloudState(state, meta),
+      getAttachmentBlob: (id) => readAttachmentBlob(id),
+      onAttachmentsUploaded: () => this.persistTasks(),
+      onStatus: (status, detail) => this.onCloudStatus(status, detail),
+      onToast: (title, desc, type) => this.toast(title, desc, type),
+    });
+    this.onCloudStatus(this.cloud.status, this.cloud.getStatus());
+    this.cloud.init();
   }
 
   /* ---------------- 存储 ---------------- */
@@ -351,6 +366,7 @@ export class ReimburseBoard {
   persistProcessed() {
     try {
       localStorage.setItem(PROCESSED_KEY, JSON.stringify(this.processedEvents));
+      if (!this.applyingCloud) this.cloud?.markLocalChange();
     } catch (err) {
       console.warn('已处理记录保存失败', err);
     }
@@ -411,6 +427,7 @@ export class ReimburseBoard {
         type: a.type || '',
         written: !!a.written,
         voucherName: a.voucherName || '',
+        cloudFileId: a.cloudFileId || '',
       })) : [],
       collapsed: !!t.collapsed,
       invoiceReceived: !!t.invoiceReceived,
@@ -433,6 +450,7 @@ export class ReimburseBoard {
   persistTasks() {
     try {
       localStorage.setItem(TASKS_KEY, JSON.stringify(this.tasks));
+      if (!this.applyingCloud) this.cloud?.markLocalChange();
       return true;
     } catch (err) {
       console.warn('保存报销数据失败', err);
@@ -504,6 +522,9 @@ export class ReimburseBoard {
             <button type="button" class="rb-today-btn" data-rb="today">回到今天</button>
           </div>
           <div class="rb-top-actions">
+            <button type="button" class="rb-cloud-btn" data-rb="cloud" id="rbCloudBtn" title="腾讯云开发 · 多设备同步">
+              ${ICON.cloud}<span id="rbCloudLabel">云同步</span><i class="rb-cloud-dot" id="rbCloudDot"></i>
+            </button>
             <button type="button" class="rb-invoice-btn" data-rb="invoice" title="发票追踪 · 自动抓取已报销中有发票的记录">
               ${ICON.invoice}<span>发票追踪</span><b class="rb-inv-badge" id="rbInvoiceBadge">0</b>
             </button>
@@ -745,6 +766,89 @@ export class ReimburseBoard {
         </div>
       </div>
 
+      <div class="rb-modal rb-cloud-modal" id="rbCloudModal" aria-hidden="true">
+        <div class="rb-cloud-sheet">
+          <header class="rb-report-head">
+            <div>
+              <span class="rb-export-kicker">TENCENT CLOUDBASE SYNC</span>
+              <h2>腾讯云开发同步</h2>
+              <p id="rbCloudMeta">团队共享一个工作区 · 多设备自动实时同步</p>
+            </div>
+            <div class="rb-report-head-actions">
+              <span class="rb-cloud-status" id="rbCloudStatus">未配置</span>
+              <button type="button" class="rb-icon-btn" data-rb="cloud-close" aria-label="关闭云同步设置">${ICON.close}</button>
+            </div>
+          </header>
+          <div class="rb-cloud-body">
+            <section class="rb-cloud-section">
+              <div class="rb-cloud-section-head">
+                <span>01</span>
+                <div><h3>环境与团队工作区账号</h3><p>所有设备登录同一个工作区账号，即可共享报销台账与附件。</p></div>
+              </div>
+              <label class="rb-field rb-cloud-field">
+                <span>云开发环境 ID <em>ENV ID</em></span>
+                <input id="rbCloudEnv" placeholder="例如：goodwork-prod-1a2b3c" autocomplete="off" />
+              </label>
+              <div class="rb-cloud-grid">
+                <label class="rb-field rb-cloud-field">
+                  <span>工作区账号邮箱 <em>EMAIL</em></span>
+                  <input id="rbCloudEmail" type="email" placeholder="team@example.com" autocomplete="username" />
+                </label>
+                <label class="rb-field rb-cloud-field">
+                  <span>密码 <em>PASSWORD</em></span>
+                  <input id="rbCloudPassword" type="password" placeholder="至少 6 位" autocomplete="current-password" />
+                </label>
+              </div>
+              <div class="rb-cloud-actions">
+                <button type="button" class="rb-btn primary" data-rb="cloud-login" id="rbCloudLoginBtn">${ICON.cloud}<span>登录并同步</span></button>
+                <button type="button" class="rb-btn ghost" data-rb="cloud-register" id="rbCloudRegisterBtn">${ICON.plus}<span>注册工作区账号</span></button>
+                <button type="button" class="rb-btn ghost" data-rb="cloud-logout" id="rbCloudLogoutBtn">退出登录</button>
+              </div>
+              <div class="rb-cloud-message" id="rbCloudMessage"></div>
+            </section>
+
+            <section class="rb-cloud-section">
+              <div class="rb-cloud-section-head">
+                <span>02</span>
+                <div><h3>同步控制</h3><p>自动同步会在修改后约 1.5 秒上传，并监听其他设备的变化。</p></div>
+              </div>
+              <div class="rb-cloud-sync-row">
+                <label class="rb-cloud-switch">
+                  <input type="checkbox" id="rbCloudAuto" checked />
+                  <span>自动实时同步</span>
+                </label>
+                <span class="rb-cloud-last" id="rbCloudLast">尚未同步</span>
+              </div>
+              <div class="rb-cloud-actions">
+                <button type="button" class="rb-btn ghost" data-rb="cloud-upload">${ICON.drop}<span>上传本机到云端</span></button>
+                <button type="button" class="rb-btn ghost" data-rb="cloud-download">${ICON.cloud}<span>从云端拉取</span></button>
+                <button type="button" class="rb-btn ghost" data-rb="cloud-attachments">${ICON.paperclip}<span>同步附件</span></button>
+              </div>
+              <p class="rb-cloud-hint">本机数据始终保留；云同步只负责让多台设备看到同一份工作区。</p>
+            </section>
+
+            <section class="rb-cloud-section">
+              <div class="rb-cloud-section-head">
+                <span>03</span>
+                <div><h3>云开发配置清单</h3><p>首次使用需要先在腾讯云开发控制台完成以下配置。</p></div>
+              </div>
+              <ol class="rb-cloud-steps">
+                <li>创建云开发环境，复制环境 ID 填入上方。</li>
+                <li>开启「邮箱密码登录」；如控制台启用了邮箱验证，请先完成账号验证或由管理员创建账号。</li>
+                <li>创建数据库集合 <code>goodwork_workspaces</code>，权限选择「仅创建者可读写」。</li>
+                <li>开启云存储；附件会保存到 <code>goodwork/team/</code>。</li>
+                <li>在「安全域名」中加入当前站点：<code id="rbCloudDomain"></code>。</li>
+              </ol>
+              <p class="rb-cloud-hint">团队共享模式共用一个工作区账号，请勿把账号密码发送给工作区以外的人。数据库与存储均按该账号隔离。</p>
+            </section>
+          </div>
+          <footer class="rb-cloud-foot">
+            <span>数据会同时保存在本机与云开发，离线时仍可继续使用。</span>
+            <button type="button" class="rb-btn ghost" data-rb="cloud-close">关闭</button>
+          </footer>
+        </div>
+      </div>
+
       <div class="rb-modal rb-confirm-modal" id="rbConfirmModal" aria-hidden="true">
         <div class="rb-confirm-card">
           <span class="rb-confirm-icon">${ICON.trash}</span>
@@ -826,6 +930,22 @@ export class ReimburseBoard {
       statementMonthEl: $('#rbStatementMonth', shell),
       statementMeta: $('#rbStatementMeta', shell),
       statementBody: $('#rbStatementBody', shell),
+      cloudBtn: $('#rbCloudBtn', shell),
+      cloudLabel: $('#rbCloudLabel', shell),
+      cloudDot: $('#rbCloudDot', shell),
+      cloud: $('#rbCloudModal', shell),
+      cloudMeta: $('#rbCloudMeta', shell),
+      cloudStatus: $('#rbCloudStatus', shell),
+      cloudEnv: $('#rbCloudEnv', shell),
+      cloudEmail: $('#rbCloudEmail', shell),
+      cloudPassword: $('#rbCloudPassword', shell),
+      cloudAuto: $('#rbCloudAuto', shell),
+      cloudLast: $('#rbCloudLast', shell),
+      cloudMessage: $('#rbCloudMessage', shell),
+      cloudDomain: $('#rbCloudDomain', shell),
+      cloudLoginBtn: $('#rbCloudLoginBtn', shell),
+      cloudRegisterBtn: $('#rbCloudRegisterBtn', shell),
+      cloudLogoutBtn: $('#rbCloudLogoutBtn', shell),
     };
     this.cardRects = new Map();
   }
@@ -914,6 +1034,17 @@ export class ReimburseBoard {
       this.renderStatement();
     });
 
+    this.el.cloudAuto.addEventListener('change', () => {
+      this.cloud?.setAutoSync(this.el.cloudAuto.checked);
+      this.renderCloudSettings();
+    });
+    this.el.cloudPassword.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.cloudLogin();
+      }
+    });
+
     this.el.exportStart.addEventListener('change', () => {
       this.exportStart = this.el.exportStart.value || monthStartKey();
       this.persistSettings();
@@ -984,6 +1115,7 @@ export class ReimburseBoard {
         return;
       }
       if (e.key !== 'Escape') return;
+      if (this.cloudOpen) { this.closeCloudModal(); return; }
       if (this.statementOpen) { this.closeStatement(); return; }
       if (this.invoiceOpen) { this.closeInvoice(); return; }
       if ($('#rbPreviewModal', this.root).classList.contains('is-open')) { this.closePreview(); return; }
@@ -1025,6 +1157,7 @@ export class ReimburseBoard {
     this.closeReport(true);
     this.closeStatement(true);
     this.closeInvoice(true);
+    this.closeCloudModal(true);
     this.closeConfirm(true);
     this.cancelDrag();
     this.root.classList.remove('is-visible');
@@ -1092,6 +1225,14 @@ export class ReimburseBoard {
       case 'statement': this.openStatement(); break;
       case 'statement-close': this.closeStatement(); break;
       case 'statement-export': this.exportStatement(); break;
+      case 'cloud': this.openCloudModal(); break;
+      case 'cloud-close': this.closeCloudModal(); break;
+      case 'cloud-login': this.cloudLogin(); break;
+      case 'cloud-register': this.cloudRegister(); break;
+      case 'cloud-logout': this.cloudLogout(); break;
+      case 'cloud-upload': this.cloudUpload(); break;
+      case 'cloud-download': this.cloudDownload(); break;
+      case 'cloud-attachments': this.cloudSyncAttachments(); break;
       case 'processed-export': this.exportProcessed(); break;
       case 'invoice': this.openInvoice(); break;
       case 'invoice-close': this.closeInvoice(); break;
@@ -1826,6 +1967,7 @@ export class ReimburseBoard {
           type: f.file.type || '',
           written: false,
           voucherName: '',
+          cloudFileId: '',
         };
         attachments.push(meta);
       }
@@ -1835,7 +1977,7 @@ export class ReimburseBoard {
         for (let i = 0; i < task.attachments.length; i++) {
           const meta = task.attachments[i];
           if (meta.written) continue;
-          const blob = await readAttachmentBlob(meta.id);
+          const blob = await this.ensureAttachmentBlob(meta);
           if (!blob) continue;
           try {
             const fileName = await this.writeVoucherFile(task, blob, meta.name, i);
@@ -1864,6 +2006,9 @@ export class ReimburseBoard {
       this.closeDrawer(true);
       this.renderAll();
       this.cardRects = new Map();
+      if (this.cloud?.isConnected() && task.attachments.length) {
+        this.cloud.syncTaskAttachments(task).catch((err) => console.warn('附件云同步失败', err));
+      }
       const localOnly = task.attachments.length > 0 && this.folderStatus !== 'connected';
       this.toast(
         isEditing ? '报销申请已更新' : '报销申请已创建',
@@ -2100,12 +2245,13 @@ export class ReimburseBoard {
   /* ---------------- 附件下载 ---------------- */
 
   async downloadAttachment(id) {
-    const rec = await readAttachmentBlob(id);
-    if (!rec) { this.toast('附件不存在', '本地缓存中未找到该文件。'); return; }
+    const meta = this.findAttachmentMeta(id);
+    const rec = meta ? await this.ensureAttachmentBlob(meta) : await readAttachmentBlob(id);
+    if (!rec) { this.toast('附件不存在', '本地缓存或云端中未找到该文件。'); return; }
     const url = URL.createObjectURL(rec);
     const a = document.createElement('a');
     a.href = url;
-    a.download = rec.name || '附件';
+    a.download = rec.name || meta?.name || '附件';
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2230,7 +2376,7 @@ export class ReimburseBoard {
         for (let i = 0; i < task.attachments.length; i++) {
           const meta = task.attachments[i];
           if (meta.written) continue;
-          const blob = await readAttachmentBlob(meta.id);
+          const blob = await this.ensureAttachmentBlob(meta);
           if (!blob) continue;
           try {
             const fileName = await this.writeVoucherFile(task, blob, meta.name, i);
@@ -2504,7 +2650,7 @@ export class ReimburseBoard {
   syncModalBodyClass() {
     document.body.classList.toggle(
       'is-reimburse-modal',
-      this.reportOpen || this.invoiceOpen || this.statementOpen
+      this.reportOpen || this.invoiceOpen || this.statementOpen || this.cloudOpen
     );
   }
 
@@ -2633,6 +2779,261 @@ export class ReimburseBoard {
     this.el.statement.classList.remove('is-open');
     this.el.statement.setAttribute('aria-hidden', 'true');
     this.syncModalBodyClass();
+  }
+
+  /* ---------------- 腾讯云开发同步 ---------------- */
+
+  getCloudState() {
+    return {
+      workspace: 'GOODWORK 古德車房',
+      schemaVersion: 1,
+      tasks: this.tasks.map((t) => ({ ...t })),
+      processedEvents: this.processedEvents.map((e) => ({ ...e })),
+    };
+  }
+
+  applyCloudState(state, meta = {}) {
+    if (!state || !Array.isArray(state.tasks)) return;
+    this.applyingCloud = true;
+    try {
+      const localWritten = new Map();
+      for (const task of this.tasks) {
+        for (const att of task.attachments || []) {
+          if (att.written) localWritten.set(att.id, { written: true, voucherName: att.voucherName || '' });
+        }
+      }
+      const incoming = state.tasks.map((t) => this.normalizeTask(t));
+      for (const task of incoming) {
+        for (const att of task.attachments || []) {
+          const local = localWritten.get(att.id);
+          if (local) {
+            att.written = local.written;
+            att.voucherName = local.voucherName;
+          }
+        }
+      }
+      this.tasks = incoming;
+      this.processedEvents = Array.isArray(state.processedEvents) ? state.processedEvents : [];
+      try {
+        localStorage.setItem(TASKS_KEY, JSON.stringify(this.tasks));
+        localStorage.setItem(PROCESSED_KEY, JSON.stringify(this.processedEvents));
+      } catch (err) {
+        console.warn('云端数据写入本地失败', err);
+      }
+      this.renderAll({ animate: false });
+      if (!meta.silent) {
+        this.toast(
+          '云端数据已同步',
+          `${this.tasks.length} 笔记录 · ${this.processedEvents.length} 条已处理${meta.updatedAt ? ` · ${localDateTimeFromIso(meta.updatedAt)}` : ''}`,
+          'ok'
+        );
+      }
+    } finally {
+      this.applyingCloud = false;
+    }
+  }
+
+  onCloudStatus(status, detail = {}) {
+    if (!this.el.cloudBtn) return;
+    const labels = {
+      disabled: '云同步',
+      'need-login': '需登录',
+      connecting: '连接中',
+      syncing: '同步中',
+      connected: '已连接',
+      error: '同步异常',
+      offline: '离线',
+    };
+    const label = labels[status] || '云同步';
+    this.el.cloudLabel.textContent = label;
+    this.el.cloudBtn.dataset.status = status;
+    this.el.cloudBtn.classList.toggle('is-connected', status === 'connected');
+    this.el.cloudBtn.classList.toggle('is-syncing', status === 'connecting' || status === 'syncing');
+    this.el.cloudBtn.classList.toggle('is-error', status === 'error');
+    this.el.cloudBtn.classList.toggle('is-warn', status === 'need-login');
+    this.el.cloudBtn.title = detail.message
+      ? `云同步：${detail.message}`
+      : `腾讯云开发 · ${label}`;
+    if (this.cloudOpen) this.renderCloudSettings();
+  }
+
+  openCloudModal() {
+    this.cloudOpen = true;
+    this.el.cloud.classList.add('is-open');
+    this.el.cloud.setAttribute('aria-hidden', 'false');
+    this.syncModalBodyClass();
+    this.renderCloudSettings(true);
+  }
+
+  closeCloudModal(immediate = false) {
+    this.cloudOpen = false;
+    this.el.cloud.classList.remove('is-open');
+    this.el.cloud.setAttribute('aria-hidden', 'true');
+    this.syncModalBodyClass();
+  }
+
+  renderCloudSettings(populate = false) {
+    if (!this.cloud || !this.el.cloudEnv) return;
+    const cs = this.cloud;
+    if (populate) {
+      this.el.cloudEnv.value = cs.envId;
+      this.el.cloudEmail.value = cs.email;
+    }
+    this.el.cloudAuto.checked = cs.autoSync;
+    this.el.cloudDomain.textContent = location.host || location.origin;
+    const statusLabels = {
+      disabled: '未配置',
+      'need-login': '需要登录',
+      connecting: '连接中',
+      syncing: '同步中',
+      connected: '已连接',
+      error: '同步异常',
+      offline: '离线',
+    };
+    this.el.cloudStatus.textContent = statusLabels[cs.status] || '未配置';
+    this.el.cloudStatus.className = `rb-cloud-status is-${cs.status}`;
+    this.el.cloudMeta.textContent = cs.isConnected()
+      ? `团队工作区 · ${cs.email}`
+      : (cs.envId ? '已填写环境，登录后开始同步' : '团队共享一个工作区 · 多设备自动实时同步');
+    this.el.cloudLast.textContent = cs.lastSyncAt
+      ? `最近同步 ${localDateTimeFromIso(cs.lastSyncAt)}`
+      : '尚未同步';
+    this.el.cloudMessage.textContent = cs.errorDetail || '';
+    this.el.cloudMessage.classList.toggle('is-error', !!cs.errorDetail);
+    this.el.cloudLoginBtn.disabled = this.cloudBusy || cs.isConnected();
+    this.el.cloudRegisterBtn.disabled = this.cloudBusy || cs.isConnected();
+    this.el.cloudLogoutBtn.disabled = this.cloudBusy || !cs.email;
+    const loginLabel = this.el.cloudLoginBtn.querySelector('span');
+    if (loginLabel) loginLabel.textContent = this.cloudBusy ? '连接中…' : '登录并同步';
+  }
+
+  setCloudBusy(busy) {
+    this.cloudBusy = busy;
+    this.renderCloudSettings();
+  }
+
+  showCloudError(message) {
+    if (this.el.cloudMessage) {
+      this.el.cloudMessage.textContent = message;
+      this.el.cloudMessage.classList.add('is-error');
+    }
+    this.toast('云同步失败', message);
+  }
+
+  async cloudLogin() {
+    if (this.cloudBusy || !this.cloud) return;
+    const envId = this.el.cloudEnv.value.trim();
+    const email = this.el.cloudEmail.value.trim();
+    const password = this.el.cloudPassword.value;
+    if (!envId || !email || !password) {
+      this.showCloudError('请填写环境 ID、工作区账号邮箱和密码。');
+      return;
+    }
+    this.setCloudBusy(true);
+    try {
+      await this.cloud.login({ envId, email, password, autoSync: this.el.cloudAuto.checked });
+      this.el.cloudPassword.value = '';
+      this.renderCloudSettings();
+    } catch (err) {
+      this.showCloudError(err.message || '登录失败');
+    } finally {
+      this.setCloudBusy(false);
+    }
+  }
+
+  async cloudRegister() {
+    if (this.cloudBusy || !this.cloud) return;
+    const envId = this.el.cloudEnv.value.trim();
+    const email = this.el.cloudEmail.value.trim();
+    const password = this.el.cloudPassword.value;
+    if (!envId || !email || !password) {
+      this.showCloudError('请填写环境 ID、工作区账号邮箱和密码。');
+      return;
+    }
+    this.setCloudBusy(true);
+    try {
+      await this.cloud.register({ envId, email, password, autoSync: this.el.cloudAuto.checked });
+      this.el.cloudPassword.value = '';
+      this.renderCloudSettings();
+    } catch (err) {
+      this.showCloudError(err.message || '注册失败');
+    } finally {
+      this.setCloudBusy(false);
+    }
+  }
+
+  async cloudLogout() {
+    if (this.cloudBusy || !this.cloud) return;
+    this.setCloudBusy(true);
+    try {
+      await this.cloud.logout();
+      this.renderCloudSettings();
+      this.toast('已退出云同步', '本机数据仍保留，可随时重新登录。');
+    } finally {
+      this.setCloudBusy(false);
+    }
+  }
+
+  async cloudUpload() {
+    if (!this.cloud?.isConnected()) {
+      this.showCloudError('请先登录云同步。');
+      return;
+    }
+    await this.cloud.pushNow({ force: true, override: true });
+    this.renderCloudSettings();
+  }
+
+  async cloudDownload() {
+    if (!this.cloud?.isConnected()) {
+      this.showCloudError('请先登录云同步。');
+      return;
+    }
+    try {
+      await this.cloud.pullNow();
+      this.renderCloudSettings();
+    } catch (err) {
+      this.showCloudError(err.message || '从云端拉取失败');
+    }
+  }
+
+  async cloudSyncAttachments() {
+    if (!this.cloud?.isConnected()) {
+      this.showCloudError('请先登录云同步。');
+      return;
+    }
+    await this.cloud.syncAllAttachments();
+    this.renderCloudSettings();
+  }
+
+  findAttachmentMeta(id) {
+    for (const task of this.tasks) {
+      for (const meta of task.attachments || []) {
+        if (meta.id === id) return meta;
+      }
+    }
+    return null;
+  }
+
+  async ensureAttachmentBlob(meta) {
+    if (!meta) return null;
+    let blob = null;
+    try { blob = await readAttachmentBlob(meta.id); } catch { blob = null; }
+    if (blob) return blob;
+    if (meta.cloudFileId && this.cloud?.isConnected()) {
+      try {
+        const downloaded = await this.cloud.downloadAttachment(meta.cloudFileId);
+        if (downloaded) {
+          const file = new File([downloaded], meta.name || '附件', {
+            type: meta.type || 'application/octet-stream',
+          });
+          await storeAttachmentBlob(meta.id, file);
+          return file;
+        }
+      } catch (err) {
+        console.warn('云端附件下载失败', meta.name, err);
+      }
+    }
+    return null;
   }
 
   statementTasks(month) {
@@ -3210,7 +3611,7 @@ export class ReimburseBoard {
       const items = [];
       for (const meta of task.attachments || []) {
         let blob = null;
-        try { blob = await readAttachmentBlob(meta.id); } catch { blob = null; }
+        try { blob = await this.ensureAttachmentBlob(meta); } catch { blob = null; }
         const isImage = isImageFile({ name: meta.name, type: meta.type });
         let image = null;
         if (blob && isImage) {
