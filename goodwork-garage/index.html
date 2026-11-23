@@ -156,9 +156,10 @@
   </div>
 
   <!-- 🛠️ CloudSync 连接状态悬浮指示器 -->
-  <div id="__csStatus" style="position:fixed;bottom:12px;left:12px;z-index:99999;padding:8px 14px;border-radius:20px;background:#222;color:#ddd;font:12px/1.4 -apple-system,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);border:1px solid #444;max-width:320px;">
+  <div id="__csStatus" style="position:fixed;bottom:12px;left:12px;z-index:99999;padding:8px 14px;border-radius:20px;background:#222;color:#ddd;font:12px/1.4 -apple-system,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);border:1px solid #444;max-width:360px;cursor:pointer;" title="点一下强制同步到云端">
     <span id="__csDot" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#888;vertical-align:middle;margin-right:6px;"></span>
     <span id="__csText">云同步初始化中...</span>
+    <span style="margin-left:8px;padding:1px 6px;background:#057;border-radius:10px;font-size:11px;">🔄强制同步</span>
   </div>
   <script>
     (function(){
@@ -171,6 +172,20 @@
         var l={connected:'✅ 云已连接',connecting:'🔄 连接中...',syncing:'☁️ 同步中',error:'❌ 连接失败','need-login':'🔑 需手动连接'};
         txt.textContent=(l[status]||status)+(msg?' · '+msg:'');
       }
+      // 点击强制同步
+      document.getElementById('__csStatus').addEventListener('click', function(){
+        var cs=window.__cloudSync||window.__cloudSyncApp;
+        if(cs){
+          console.log('[手动] 强制 pushNow...');
+          cs.pushNow({force:true,silent:false}).then(function(r){
+            console.log('[手动] pushNow:',r?'✅ 成功':'❌ 失败');
+          }).catch(function(e){
+            console.error('[手动] pushNow 异常:',e);
+          });
+        }else{
+          alert('CloudSync 还没初始化，请打开报销工作台后再试');
+        }
+      });
       setInterval(function(){
         var cs=window.__cloudSync||window.__cloudSyncApp;
         if(cs&&cs.getStatus){

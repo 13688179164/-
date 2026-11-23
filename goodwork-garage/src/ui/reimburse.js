@@ -2016,6 +2016,13 @@ export class ReimburseBoard {
       }
       this.syncProcessed(task, original ? original.status : null);
       this.persistTasks();
+      // 🔧 保存后强制立即上云，不等 debounce
+      try {
+        const pushed = await this.cloud?.pushNow({ force: true, silent: true });
+        console.log('[reimburse] pushNow 结果:', pushed ? '✅ 已上云' : '⏳ 未上云 (可能还没连接)');
+      } catch (pushErr) {
+        console.warn('[reimburse] pushNow 异常（不影响本地保存）:', pushErr?.message);
+      }
       this.viewDate = dateKeyOf(task.appliedAt);
       this.filterStart = this.viewDate;
       this.filterEnd = this.viewDate;
