@@ -15,6 +15,8 @@
 const SETTINGS_KEY = 'goodwork.cloud.settings.v1';
 const DEVICE_KEY = 'goodwork.cloud.device.v1';
 const DEFAULT_ENV_ID = 'attractive-starfish-d0bp2e865971';
+// CloudBase 发布密钥（Publishable Key）—— 前端访问网关的凭证
+const PUBLISHABLE_KEY = 'eyJhbGciOiJSUzI1NiIsImtpZCI6IjIxMTE1ZTA4LWJjYjQtNGViZS1iMzQ2LTRkMDBhOWUxMWY4NCJ9.eyJpc3MiOiJodHRwczovL2F0dHJhY3RpdmUtc3RhcmZpc2gtZDBicDJlODY1OTcxLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsImV4cCI6NDA5OTEwNDgzOCwiaWF0IjoxNzk1NDIxNjM4LCJub25jZSI6IkM2OXNFOVRWU2E2N09TRmNfbEFBLWciLCJhdF9oYXNoIjoiQzY5c0U5VFZTYTY3T1NGY19sQUEtZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.BbEqc_mku1-zXHvEAI3bUhUyDfjlkPhbyE_gHrUsF2mDuc0FlgskbZ9qziNP9Bk3gW4mWNDetSt7fq70Z6Y3fsypBOZz9MGb5Hgf1Cm1LPZsdXi8Vaw5nDnUnR9wx6YgxhjGYUwI9hYRGMmy7FR4YtRZMQC9wR0VJAda6G1Ac_YF00R1Ptdw_ljUmyB5-W5osDiklvP_XcsbboR4ph9Poo8tCJtpzDkIhvZ9A0ypSfM9HZnqHRpV-X3VJy3fDyeQ6tKZGt6iCbrUuFDqUXBZ8oCCRWAYXKS2gUg5OyGa538Sj6llJDlJxJjEqgz9lfaiWRnYuGTQv78E-5WEkdINuA';
 const POLL_INTERVAL_MS = 3000; // 3 秒轮询一次
 const PUSH_DEBOUNCE_MS = 1500;  // 本地修改后的上传防抖
 
@@ -165,7 +167,7 @@ export class CloudSync {
     const sdk = await this.loadSdk();
     this.settings.envId = envId;
     this.saveSettings();
-    this.app = sdk.init({ env: envId });
+    this.app = sdk.init({ env: envId, accessKey: PUBLISHABLE_KEY });
     this.auth = this.app.auth({ persistence: 'local' });
     // rdb() 返回 PostgREST 查询构造器
     if (typeof this.app.rdb === 'function') {
