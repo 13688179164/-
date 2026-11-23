@@ -167,7 +167,14 @@ export class CloudSync {
     const sdk = await this.loadSdk();
     this.settings.envId = envId;
     this.saveSettings();
-    this.app = sdk.init({ env: envId, accessKey: PUBLISHABLE_KEY });
+    // apiOrigin: 强制 auth 也走新网关 (api.tcloudbasegateway.com)
+    // v2.27.1 vendor SDK 默认 auth 走老网关 ap-shanghai.tcb-api.tencentcloudapi.com
+    // 老网关匿名登录没开，必须覆盖到新网关
+    this.app = sdk.init({
+      env: envId,
+      accessKey: PUBLISHABLE_KEY,
+      apiOrigin: `https://${envId}.api.tcloudbasegateway.com`,
+    });
     this.auth = this.app.auth({ persistence: 'local' });
     // rdb() 返回 PostgREST 查询构造器
     if (typeof this.app.rdb === 'function') {
