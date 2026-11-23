@@ -23,7 +23,7 @@ import { InteractionSystem } from './systems/interaction.js?v=20261123v93';
 import { QuestSystem } from './systems/quest.js?v=20261123v93';
 import { AudioEngine } from './audio.js?v=20261123v93';
 import { UI } from './ui/ui.js?v=20261123v93';
-import { ReimburseBoard } from './ui/reimburse.js?v=20261123v93';
+import { ReimburseBoard } from './ui/reimburse.js?v=20261123v914';
 import { CloudSync } from './core/cloudSync.js?v=20261123v93';
 
 // 🛠️ 在任何 UI 初始化之前，先建立一个独立的 CloudSync 单例
@@ -101,8 +101,19 @@ class GoodworkApp {
       });
     } catch (err) {
       console.error(err);
-      ui.setLoading(0, '当前浏览器无法初始化 WebGL');
-      ui.el.loadingStatus.textContent = '当前浏览器不支持 WebGL2，请更换浏览器后重试。';
+      // 🛠️ 移动端 / 低性能设备无 WebGL2 时的降级：仍可直接进入报销工作台（纯 DOM）
+      ui.setLoading(100, '已进入纯数据模式（无 3D 场景）');
+      ui.setReady();
+      try {
+        this.reimburse = new ReimburseBoard({
+          onClose: () => {},
+          onToast: (title, desc, type) => this.ui.toast(title, desc, type),
+        });
+        this.reimburse.open();
+      } catch (e2) {
+        console.error('降级进入工作台失败', e2);
+        ui.el.loadingStatus.textContent = '当前浏览器不支持 WebGL2，且工作台加载失败。';
+      }
       return;
     }
     this.renderer = renderer;

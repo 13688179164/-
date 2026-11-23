@@ -1860,3 +1860,96 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
   .rb-cloud-foot span { display: none; }
   .rb-cloud-actions .rb-btn { flex: 1 1 auto; }
 }
+
+/* =========================================================
+   移动端专项适配 (手机竖屏 ≤700px)
+   目标：所有内容完整可见，不依赖横向拖动
+   ========================================================= */
+@media (max-width: 700px) {
+  /* 动态视口高度，规避手机地址栏/工具栏遮挡 */
+  .rboard .rb-shell {
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
+    padding: 12px 12px 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    transform: none;
+  }
+
+  /* 顶栏：品牌名换行不溢出，操作按钮紧凑 */
+  .rb-top { grid-template-columns: 1fr auto; gap: 8px 10px; }
+  .rb-brand { gap: 8px; }
+  .rb-mark { width: 30px; height: 30px; font-size: 15px; }
+  .rb-brand-name { font-size: 11px; letter-spacing: 0.06em; white-space: normal; word-break: break-word; }
+  .rb-brand-name span { display: none; }
+  .rb-brand-sub { display: none; }
+  .rb-top-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .rb-day-nav { grid-column: 1 / -1; grid-row: 2; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+  .rb-day-field { flex: 1 1 auto; min-width: 0; }
+
+  /* Hero 区：单列，字号收敛 */
+  .rb-hero { grid-template-columns: 1fr; gap: 10px; padding: 10px 0 8px; }
+  .rb-pct { font-size: clamp(48px, 15vw, 76px); }
+  .rb-hero-progress { padding: 12px; }
+  .rb-mini-row, .rb-legend { flex-wrap: wrap; gap: 6px 10px; }
+
+  /* 导出卡片：单列铺满 */
+  .rb-export-card { grid-template-columns: 1fr; gap: 8px; padding: 12px; }
+  .rb-export-head, .rb-range, .rb-presets, .rb-export-actions, .rb-folder-row { grid-column: 1; }
+  .rb-presets { flex-wrap: wrap; }
+  .rb-export-actions .rb-btn { flex: 1 1 100%; }
+
+  /* 看板：改为单列纵向堆叠，全部卡片可见，无需横向滚动 */
+  .rb-kanban {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    overflow: visible;
+    gap: 12px;
+    padding-bottom: 16px;
+    scroll-snap-type: none;
+  }
+  .rb-col { width: 100%; max-height: none; min-height: 0; scroll-snap-align: none; }
+  .rb-col-scroll { max-height: none; overflow: visible; }
+
+  /* 底部总计：换行铺满，避免被遮挡 */
+  .rb-bottom { flex-wrap: wrap; gap: 8px 14px; padding: 10px 2px 14px; }
+  .rb-total { flex: 1 1 auto; }
+  .rb-total > b { font-size: 18px; }
+
+  /* 已处理待报销条：紧凑 */
+  .rb-processed { padding: 9px 11px; }
+  .rb-processed-main { min-width: 0; }
+
+  /* 弹层/抽屉：全屏，内容可纵向滚动 */
+  .rb-drawer, .rb-report-sheet, .rb-invoice-sheet, .rb-statement-sheet, .rb-cloud-sheet {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    border-radius: 0;
+    border: 0;
+  }
+  .rb-drawer-body, .rb-report-body, .rb-invoice-body, .rb-cloud-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  /* 财务报表宽表允许自身内部横向滚动，不被裁剪 */
+  .rb-statement-body { overflow: auto; }
+  .rb-fin-paper { min-width: 980px; }
+
+  /* 表单网格单列 */
+  .rb-form-grid, .rb-high-grid, .rb-cloud-grid { grid-template-columns: 1fr; }
+  .rb-filter-field { flex: 1 1 calc(50% - 6px); }
+  .rb-filter-range input { min-width: 0; }
+
+  .rb-modal { padding: 0; }
+  .rb-confirm-card { margin: 14px; max-width: calc(100vw - 28px); }
+}
+
+/* 超小屏 (≤380px) 进一步压缩 */
+@media (max-width: 380px) {
+  .rboard .rb-shell { padding: 10px 10px 0; }
+  .rb-pct { font-size: clamp(42px, 14vw, 64px); }
+  .rb-new-btn, .rb-back-btn { font-size: 7.5px; padding: 0 8px; }
+  .rb-brand-name { font-size: 10px; }
+}

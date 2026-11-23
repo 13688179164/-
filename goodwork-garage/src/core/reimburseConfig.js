@@ -48,7 +48,7 @@ export const STATUS_LIST = [
 
 export const STATUS_MAP = Object.fromEntries(STATUS_LIST.map((s) => [s.id, s]));
 
-export const EMPLOYEE_NAMES = ['林晓', '陈默', '苏禾', '周野', '王海', '李敏', '周师傅', '陈师傅'];
+export const EMPLOYEE_NAMES = ['甘文康', '李古月', '刘阳', '刘长江', '陈俊杰', '罗阳', '橘子'];
 
 export const ATTACHMENT_ACCEPT = '.png,.jpg,.jpeg,.webp,.gif,.bmp,.svg,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv';
 
