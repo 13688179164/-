@@ -41,7 +41,7 @@ export const DEPT_CATEGORIES = {
 };
 
 export const STATUS_LIST = [
-  { id: 'pending', label: '待报销', en: 'PENDING', hint: '进行中 · 荧光高亮', accent: '#d9ff43' },
+  { id: 'pending', label: '待报销', en: 'PENDING', hint: '进行中 · 浅金高亮', accent: '#c9a75a' },
   { id: 'reimbursed', label: '已报销', en: 'REIMBURSED', hint: '已完成', accent: '#d8b477' },
   { id: 'supplemented', label: '已补充附件', en: 'SUPPLEMENTED', hint: '附件已补充', accent: '#8fbbe8' },
 ];
