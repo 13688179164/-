@@ -3217,6 +3217,7 @@ export class ReimburseBoard {
     const goldFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F0DE' } };
     const moneyFmt = '#,##0.00';
     const links = [];
+    const previewLinks = [];
 
     // 先规划「成本明细」分组所在行号，供报表数字跳转
     const buckets = new Map();
@@ -3367,10 +3368,10 @@ export class ReimburseBoard {
 
     /* ---------- 成本明细（附件列嵌入缩略图） ---------- */
     const ds = wb.addWorksheet('成本明细');
-    [8, 16, 13, 10, 10, 14, 12, 18, 12, 46, 40].forEach((w, i) => { ds.getColumn(i + 1).width = w; });
+    [8, 16, 13, 10, 10, 14, 12, 18, 12, 46, 44, 14].forEach((w, i) => { ds.getColumn(i + 1).width = w; });
 
     const dTitle = ds.addRow([`GOODWORK 车房 · 成本明细（${data.label}）`]);
-    ds.mergeCells(`A${dTitle.number}:K${dTitle.number}`);
+    ds.mergeCells(`A${dTitle.number}:L${dTitle.number}`);
     dTitle.height = 26;
     dTitle.getCell(1).font = { name: '宋体', size: 14, bold: true, color: { argb: 'FF111111' } };
     dTitle.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
@@ -3379,9 +3380,9 @@ export class ReimburseBoard {
     dMeta.getCell(1).font = { name: '宋体', size: 9, color: { argb: 'FF666666' } };
     dMeta.getCell(5).font = { name: '宋体', size: 9, color: { argb: 'FF666666' } };
     ds.addRow([]);
-    const dHead = ds.addRow(['明细号', '成本项目', '业务单元', '申请人', '部门', '报销类别', '金额', '申请日期', '状态', '说明', '附件']);
+    const dHead = ds.addRow(['明细号', '成本项目', '业务单元', '申请人', '部门', '报销类别', '金额', '申请日期', '状态', '说明', '附件', '附件预览']);
     dHead.height = 22;
-    for (let c = 1; c <= 11; c++) {
+    for (let c = 1; c <= 12; c++) {
       const cell = dHead.getCell(c);
       cell.font = headFont;
       cell.fill = grayFill;
@@ -3393,9 +3394,9 @@ export class ReimburseBoard {
     let embeddedRows = 0;
     for (const g of groups) {
       const gRow = ds.addRow([`【${g.label} · ${g.unit.label}】 共 ${g.list.length} 笔 · 合计 ¥${money(g.sum)}`]);
-      ds.mergeCells(`A${gRow.number}:K${gRow.number}`);
+      ds.mergeCells(`A${gRow.number}:L${gRow.number}`);
       gRow.height = 22;
-      for (let c = 1; c <= 11; c++) {
+      for (let c = 1; c <= 12; c++) {
         const cell = gRow.getCell(c);
         cell.fill = goldFill;
         cell.border = border;
@@ -3416,9 +3417,10 @@ export class ReimburseBoard {
           STATUS_LABEL[task.status] || task.status,
           String(task.content || ''),
           '',
+          '',
         ]);
         row.height = 20;
-        for (let c = 1; c <= 11; c++) {
+        for (let c = 1; c <= 12; c++) {
           const cell = row.getCell(c);
           cell.font = bodyFont;
           cell.border = border;
@@ -3432,6 +3434,7 @@ export class ReimburseBoard {
         }
         const section = attachmentData.byTask?.get(task.id);
         const cell = row.getCell(11);
+        const linkCell = row.getCell(12);
         if (section && section.items.length) {
           if (section.strip) {
             cell.value = '';
@@ -3439,10 +3442,10 @@ export class ReimburseBoard {
               const imageId = wb.addImage({ base64: section.strip, extension: 'png' });
               ds.addImage(imageId, {
                 tl: { col: 10.02, row: row.number - 1 + 0.03 },
-                ext: { width: 276, height: 94 },
+                ext: { width: 300, height: 150 },
                 editAs: 'oneCell',
               });
-              row.height = 76;
+              row.height = 122;
               embeddedRows += 1;
             } catch (err) {
               console.warn('成本明细附件缩略图嵌入失败', err);
@@ -3453,16 +3456,27 @@ export class ReimburseBoard {
           }
           cell.font = { name: '宋体', size: 9, color: { argb: 'FF6B5330' } };
           cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+          linkCell.value = '查看大图';
+          linkCell.font = { name: '宋体', size: 9, color: { argb: 'FF1F5FA8' }, underline: true };
+          linkCell.alignment = { horizontal: 'center', vertical: 'middle' };
+          previewLinks.push({
+            ref: `L${row.number}`,
+            location: `'附件预览'!A${section.sectionRow || 4}`,
+            display: '查看大图',
+            tooltip: `查看该笔 ${section.items.length} 个附件大图`,
+          });
         } else {
           cell.value = '—';
           cell.alignment = { horizontal: 'center', vertical: 'middle' };
+          linkCell.value = '—';
+          linkCell.alignment = { horizontal: 'center', vertical: 'middle' };
         }
       }
     }
     ds.addRow([]);
-    const totalRow = ds.addRow(['合计', '', '', '', '', '', data.recognized, '', '', '', '']);
+    const totalRow = ds.addRow(['合计', '', '', '', '', '', data.recognized, '', '', '', '', '']);
     totalRow.height = 20;
-    for (let c = 1; c <= 11; c++) {
+    for (let c = 1; c <= 12; c++) {
       const cell = totalRow.getCell(c);
       cell.fill = goldFill;
       cell.border = border;
@@ -3471,7 +3485,73 @@ export class ReimburseBoard {
       if (c === 7) cell.numFmt = moneyFmt;
     }
 
-    wb.__goodworkLinks = { detail: links, embeddedRows, seq };
+    /* ---------- 附件预览（大图） ---------- */
+    if (attachmentData.previewTasks && attachmentData.previewTasks.length) {
+      const pv = wb.addWorksheet('附件预览');
+      pv.getColumn(1).width = 82;
+      pv.getColumn(2).width = 32;
+      pv.getColumn(3).width = 18;
+      pv.mergeCells('A1:C1');
+      pv.getCell('A1').value = `GOODWORK 车房 · 附件预览（${data.label}）`;
+      pv.getCell('A1').font = { name: '宋体', size: 16, bold: true, color: { argb: 'FF1F2937' } };
+      pv.getCell('A1').alignment = { horizontal: 'left', vertical: 'middle' };
+      pv.getRow(1).height = 32;
+      pv.mergeCells('A2:C2');
+      pv.getCell('A2').value = `${data.count} 笔已报销成本 · ${attachmentData.total || 0} 个附件 · 图片凭证按原图比例嵌入，可直接放大查看`;
+      pv.getCell('A2').font = { name: '宋体', size: 9, color: { argb: 'FF6B7280' } };
+      pv.getRow(2).height = 22;
+      pv.mergeCells('A3:C3');
+      pv.getCell('A3').value = '在「成本明细」点击附件列右侧的「查看大图」可跳转到本页对应位置；PDF / Word / Excel 等文档请在报销工作台中下载原文件查看。';
+      pv.getCell('A3').font = { name: '宋体', size: 8, color: { argb: 'FF8A8A8A' } };
+      pv.getCell('A3').alignment = { vertical: 'middle', wrapText: true };
+      pv.getRow(3).height = 30;
+
+      for (const entry of attachmentData.previewTasks) {
+        const t = entry.task;
+        pv.getRow(entry.sectionRow).height = 26;
+        pv.mergeCells(`A${entry.sectionRow}:C${entry.sectionRow}`);
+        const sectionCell = pv.getCell(`A${entry.sectionRow}`);
+        sectionCell.value = `【${t.applicant}】${formatDateTime(t.appliedAt)} · ${t.department} / ${t.category} · ¥${money(t.amount)} · ${entry.items.length} 个附件`;
+        sectionCell.fill = goldFill;
+        sectionCell.font = { name: '宋体', size: 10, bold: true, color: { argb: 'FF4B3A20' } };
+        sectionCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+
+        for (const item of entry.items) {
+          if (item.image) {
+            pv.getRow(item.previewRow).height = Math.max(80, Math.ceil(item.previewHeight / 1.333) + 8);
+            try {
+              const imageId = wb.addImage({ base64: item.image.base64, extension: 'png' });
+              pv.addImage(imageId, {
+                tl: { col: 0.03, row: item.previewRow - 1 + 0.04 },
+                ext: { width: item.previewWidth, height: item.previewHeight },
+                editAs: 'oneCell',
+              });
+            } catch (err) {
+              console.warn('附件预览图写入失败', err);
+            }
+            pv.mergeCells(`B${item.previewRow}:C${item.previewRow}`);
+            const metaCell = pv.getCell(`B${item.previewRow}`);
+            metaCell.value = `${item.name}\n${formatBytes(item.size)} · 图片凭证`;
+            metaCell.font = { name: '宋体', size: 9, color: { argb: 'FF374151' } };
+            metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+          } else {
+            pv.getRow(item.previewRow).height = 40;
+            pv.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
+            const docCell = pv.getCell(`A${item.previewRow}`);
+            docCell.value = item.missing
+              ? `附件缓存缺失：${item.name}（${formatBytes(item.size)}）`
+              : `文档附件：${item.name}（${formatBytes(item.size)}）· 请在报销工作台中下载原文件查看`;
+            docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
+            docCell.font = { name: '宋体', size: 9, color: { argb: 'FF6B5330' } };
+            docCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+            docCell.border = border;
+          }
+        }
+        pv.getRow(entry.sectionRow + entry.items.length + 1).height = 10;
+      }
+    }
+
+    wb.__goodworkLinks = { detail: links, preview: previewLinks, embeddedRows, seq };
     return wb;
   }
 
@@ -3762,29 +3842,33 @@ export class ReimburseBoard {
         const ExcelJS = await this.loadExcelJS();
         const attachmentData = await this.prepareExcelAttachments(
           { tasks: data.tasks },
-          { width: 276, height: 94, cellWidth: 84, cellHeight: 82 }
+          { width: 300, height: 150, cellWidth: 136, cellHeight: 128 },
+          { maxWidth: 560, maxHeight: 420 }
         );
         const wb = this.buildStatementWorkbookExcelJS(ExcelJS, data, attachmentData);
-        const links = wb.__goodworkLinks || { detail: [] };
+        const links = wb.__goodworkLinks || { detail: [], preview: [] };
         const buffer = await wb.xlsx.writeBuffer();
         let finalBuffer = buffer;
-        if (links.detail.length) {
+        const injectLinks = async (items, sheetName) => {
+          if (!items || !items.length) return;
           try {
             const fflate = await this.loadFFlate();
             const patched = this.injectInternalHyperlinks(
               fflate,
-              buffer,
-              { detail: links.detail },
-              { detail: '月度现金流量表' }
+              finalBuffer,
+              { detail: items },
+              { detail: sheetName }
             );
             if (patched) finalBuffer = patched;
           } catch (linkErr) {
-            console.warn('月度报表内部链接写入失败', linkErr);
+            console.warn('月度报表内部链接写入失败', sheetName, linkErr);
           }
-        }
+        };
+        await injectLinks(links.detail, '月度现金流量表');
+        await injectLinks(links.preview, '成本明细');
         blob = new Blob([finalBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         if (attachmentData.byTask.size) {
-          embedNote = ` · ${attachmentData.byTask.size} 笔附件的缩略图已嵌入成本明细`;
+          embedNote = ` · ${attachmentData.byTask.size} 笔附件已嵌入，可点「查看大图」`;
         }
       } catch (excelJsErr) {
         console.warn('月度报表附件嵌入失败，回退到普通 Excel', excelJsErr);
@@ -4135,7 +4219,9 @@ export class ReimburseBoard {
     return canvas.toDataURL('image/png').split(',')[1];
   }
 
-  async prepareExcelAttachments(stats, stripOpts = {}) {
+  async prepareExcelAttachments(stats, stripOpts = {}, previewOpts = {}) {
+    const previewMaxW = previewOpts.maxWidth || 420;
+    const previewMaxH = previewOpts.maxHeight || 300;
     const byTask = new Map();
     const previewTasks = [];
     let imageCount = 0;
@@ -4189,7 +4275,7 @@ export class ReimburseBoard {
       for (const item of entry.items) {
         item.previewRow = row;
         if (item.image) {
-          const scale = Math.min(1, 420 / item.image.width, 300 / item.image.height);
+          const scale = Math.min(1, previewMaxW / item.image.width, previewMaxH / item.image.height);
           item.previewWidth = Math.max(1, Math.round(item.image.width * scale));
           item.previewHeight = Math.max(1, Math.round(item.image.height * scale));
         }
