@@ -3202,6 +3202,142 @@ export class ReimburseBoard {
     this._statementData = data;
   }
 
+  /** 月度报表「成本明细」工作表：按成本项目 × 业务单元分组，供报表数字点击跳转 */
+  buildStatementDetailSheet(XLSX, data) {
+    const aoa = [
+      [`GOODWORK 车房 · 成本明细（${data.label}）`],
+      [`账期：${data.start} 至 ${data.end}`, '', '', '', `生成于 ${data.generatedAt}`],
+      [],
+      ['明细号', '成本项目', '业务单元', '申请人', '部门', '报销类别', '金额', '申请日期', '状态', '说明', '附件数'],
+    ];
+    const anchors = new Map();
+    const rowAnchors = new Map();
+    const groupHeaderRows = [];
+    const detailRows = [];
+    const buckets = new Map();
+    for (const t of data.tasks) {
+      const { unit, costRow, amount } = mapCostToStatement(t);
+      const key = `${costRow}|${unit}`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push({ t, amount });
+    }
+    let seq = 0;
+    for (const r of data.rows) {
+      for (const u of BUSINESS_UNITS) {
+        const list = buckets.get(`${r.label}|${u.key}`);
+        if (!list || !list.length) continue;
+        list.sort((a, b) => String(a.t.appliedAt).localeCompare(String(b.t.appliedAt)));
+        const sum = list.reduce((s, x) => s + x.amount, 0);
+        const headerRow = aoa.length + 1;
+        aoa.push([`【${r.label} · ${u.label}】 共 ${list.length} 笔 · 合计 ¥${money(sum)}`]);
+        groupHeaderRows.push(headerRow - 1);
+        const entry = { addr: `A${headerRow}`, count: list.length };
+        anchors.set(`${r.label}|${u.key}`, entry);
+        if (!rowAnchors.has(r.label)) rowAnchors.set(r.label, entry);
+        for (const { t, amount } of list) {
+          seq += 1;
+          detailRows.push(aoa.length);
+          aoa.push([
+            seq,
+            r.label,
+            u.label,
+            t.applicant || '',
+            t.department || '',
+            t.category || '',
+            amount,
+            formatDateTime(t.appliedAt),
+            STATUS_LABEL[t.status] || t.status,
+            String(t.content || ''),
+            (t.attachments || []).length,
+          ]);
+        }
+      }
+    }
+    let totalRow = -1;
+    if (seq === 0) {
+      aoa.push(['本月暂无已报销成本，无明细可展示。']);
+    } else {
+      aoa.push([]);
+      totalRow = aoa.length;
+      aoa.push(['合计', '', '', '', '', '', data.recognized, '', '', '', '']);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 10 } },
+      ...groupHeaderRows.map((r) => ({ s: { r, c: 0 }, e: { r, c: 10 } })),
+    ];
+    ws['!cols'] = [
+      { wch: 8 }, { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 10 },
+      { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 46 }, { wch: 8 },
+    ];
+    ws['!rows'] = [{ hpt: 26 }, { hpt: 16 }, { hpt: 8 }, { hpt: 22 }];
+
+    const border = {
+      top: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+      bottom: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+      left: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+      right: { style: 'thin', color: { rgb: 'FFBFBFBF' } },
+    };
+    const cellAt = (r, c) => {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+      return ws[addr];
+    };
+    cellAt(0, 0).s = {
+      font: { name: '宋体', sz: 14, bold: true, color: { rgb: 'FF111111' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    };
+    cellAt(1, 0).s = {
+      font: { name: '宋体', sz: 9, color: { rgb: 'FF666666' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+    };
+    for (let c = 0; c <= 10; c++) {
+      cellAt(3, c).s = {
+        font: { name: '宋体', sz: 10, bold: true },
+        fill: { fgColor: { rgb: 'FFE7E6E6' } },
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        border,
+      };
+    }
+    for (const r of groupHeaderRows) {
+      cellAt(r, 0).s = {
+        font: { name: '宋体', sz: 10, bold: true, color: { rgb: 'FF7A5B1E' } },
+        fill: { fgColor: { rgb: 'FFF7F0DE' } },
+        alignment: { horizontal: 'left', vertical: 'center', indent: 1 },
+        border,
+      };
+    }
+    for (const r of detailRows) {
+      for (let c = 0; c <= 10; c++) {
+        const cell = cellAt(r, c);
+        cell.s = {
+          font: { name: '宋体', sz: 10, color: { rgb: 'FF1F1F1F' } },
+          alignment: {
+            horizontal: c === 9 ? 'left' : (c >= 6 && c <= 7 ? 'right' : 'center'),
+            vertical: 'center',
+            wrapText: c === 9,
+            indent: c === 9 ? 1 : 0,
+          },
+          border,
+        };
+        if (c === 6) cell.s.numFmt = '#,##0.00';
+      }
+    }
+    if (totalRow > 0) {
+      for (let c = 0; c <= 10; c++) {
+        const cell = cellAt(totalRow, c);
+        cell.s = {
+          font: { name: '宋体', sz: 10, bold: true },
+          fill: { fgColor: { rgb: 'FFF7F0DE' } },
+          alignment: { horizontal: c === 6 ? 'right' : 'center', vertical: 'center' },
+          border,
+        };
+        if (c === 6) cell.s.numFmt = '#,##0.00';
+      }
+    }
+    return { ws, anchors, rowAnchors, seq };
+  }
+
   buildStatementWorkbook(XLSX, data) {
     const wb = XLSX.utils.book_new();
     const blank = (n) => new Array(n).fill('');
@@ -3223,7 +3359,7 @@ export class ReimburseBoard {
     });
     aoa.push(['32', '小计', '', ...BUSINESS_UNITS.map((u) => data.unitTotals[u.key] || 0), data.grand]);
     aoa.push(blank(11));
-    aoa.push(['说明：成本按报销分类自动映射至本表项目；待报销记录不计入本表。', ...blank(10)]);
+    aoa.push(['说明：点击表内金额可跳转至「成本明细」对应分类；成本按报销分类自动映射，待报销记录不计入本表。', ...blank(10)]);
     const ws = XLSX.utils.aoa_to_sheet(aoa);
 
     ws['!merges'] = [
@@ -3306,7 +3442,36 @@ export class ReimburseBoard {
       alignment: { horizontal: 'left', vertical: 'center' },
     };
 
+    // 明细页 + 数字超链接：点击报表金额跳到该项目/业务单元的成本明细
+    const detail = this.buildStatementDetailSheet(XLSX, data);
+    const linkCell = (cell, addr, tip) => {
+      if (!cell || !addr) return;
+      cell.l = { Target: `#'成本明细'!${addr}`, Tooltip: tip };
+      cell.s = cell.s || {};
+      cell.s.font = { name: '宋体', sz: 10, color: { rgb: 'FF1F5FA8' }, underline: true };
+    };
+    data.rows.forEach((row, i) => {
+      const rIdx = 6 + i;
+      BUSINESS_UNITS.forEach((u, ui) => {
+        if ((row.unitAmounts[u.key] || 0) <= 0) return;
+        const hit = detail.anchors.get(`${row.label}|${u.key}`);
+        if (hit) linkCell(cellAt(rIdx, 3 + ui), hit.addr, `${row.label} · ${u.label} 明细（${hit.count} 笔）`);
+      });
+      if (row.total > 0) {
+        const hit = detail.rowAnchors.get(row.label);
+        if (hit) linkCell(cellAt(rIdx, 10), hit.addr, `${row.label} 全部明细`);
+      }
+    });
+    const subtotalIdx = 6 + data.rows.length;
+    BUSINESS_UNITS.forEach((u, ui) => {
+      if ((data.unitTotals[u.key] || 0) > 0) {
+        linkCell(cellAt(subtotalIdx, 3 + ui), 'A1', `${u.label} 相关明细（见「成本明细」页）`);
+      }
+    });
+    if (data.grand > 0) linkCell(cellAt(subtotalIdx, 10), 'A1', '查看全部成本明细');
+
     XLSX.utils.book_append_sheet(wb, ws, '月度现金流量表');
+    XLSX.utils.book_append_sheet(wb, detail.ws, '成本明细');
     return wb;
   }
 
