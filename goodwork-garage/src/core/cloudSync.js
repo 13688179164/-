@@ -240,7 +240,13 @@ export class CloudSync {
         const rawP = localStorage.getItem(LS_PROCESSED);
         if (rawP) processedEvents = JSON.parse(rawP);
       } catch (e) {}
-      return { tasks: Array.isArray(tasks) ? tasks : [], processedEvents: Array.isArray(processedEvents) ? processedEvents : [] };
+      // 内置示例任务（GW-RB-SAMPLE-*）不再参与同步
+      const isSample = (t) => String(t?.id || '').startsWith('GW-RB-SAMPLE');
+      tasks = Array.isArray(tasks) ? tasks.filter((t) => !isSample(t)) : [];
+      processedEvents = Array.isArray(processedEvents)
+        ? processedEvents.filter((e) => !String(e?.taskId || '').startsWith('GW-RB-SAMPLE'))
+        : [];
+      return { tasks, processedEvents };
     };
     this.applyState = applyState || (() => {});
     this.getAttachmentBlob = getAttachmentBlob || (async () => null);

@@ -5,9 +5,15 @@
 import {
   DEPARTMENTS, DEPT_CATEGORIES, STATUS_LIST, STATUS_MAP,
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
-  createSampleTasks, BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
-} from '../core/reimburseConfig.js?v=20261123v914';
-import { CloudSync } from '../core/cloudSync.js?v=20261123v921';
+  BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
+} from '../core/reimburseConfig.js?v=20261123v922';
+import { CloudSync } from '../core/cloudSync.js?v=20261123v922';
+
+// 历史遗留的内置示例任务（GW-RB-SAMPLE-*），一律过滤不再展示/同步
+function isSampleTask(t) {
+  if (!t) return false;
+  return String(t.id || '').startsWith('GW-RB-SAMPLE');
+}
 
 /* ------------------------------------------------------------------ */
 /* 基础工具                                                            */
@@ -256,7 +262,6 @@ export class ReimburseBoard {
     try {
       this.onClose = onClose || (() => {});
       this.onToast = onToast || (() => {});
-      this._seededTasks = false;
       this.tasks = this.loadTasks();
       this.processedEvents = this.loadProcessedEvents();
       this.settings = this.loadSettings();
@@ -341,21 +346,20 @@ export class ReimburseBoard {
   loadTasks() {
     try {
       const raw = localStorage.getItem(TASKS_KEY);
-      if (raw === null) {
-        const samples = createSampleTasks();
-        localStorage.setItem(TASKS_KEY, JSON.stringify(samples));
-        this._seededTasks = true;
-        return samples;
-      }
+      // 🔧 不再生成默认示例报销任务；首次打开就是空看板
+      if (raw === null) return [];
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) throw new Error('tasks not array');
-      return parsed.map((t) => this.normalizeTask(t));
+      // 🔧 清掉历史遗留的示例任务（SAMPLE 系列），避免删了刷新又出现
+      const cleaned = parsed.filter((t) => !isSampleTask(t));
+      // 包含了示例任务 → 立即回写干净的本地数据，防止 CloudSync 再次把它们推到云端
+      if (cleaned.length !== parsed.length) {
+        try { localStorage.setItem(TASKS_KEY, JSON.stringify(cleaned)); } catch { /* noop */ }
+      }
+      return cleaned.map((t) => this.normalizeTask(t));
     } catch (err) {
-      console.warn('报销数据读取失败，使用示例数据', err);
-      const samples = createSampleTasks();
-      this._seededTasks = true;
-      try { localStorage.setItem(TASKS_KEY, JSON.stringify(samples)); } catch { /* noop */ }
-      return samples;
+      console.warn('报销数据读取失败，按空看板处理', err);
+      return [];
     }
   }
 
@@ -365,14 +369,6 @@ export class ReimburseBoard {
       if (raw !== null) {
         const parsed = JSON.parse(raw);
         return Array.isArray(parsed) ? parsed : [];
-      }
-      if (this._seededTasks) {
-        const seeded = this.tasks.find((t) => t.status === 'reimbursed');
-        if (seeded) {
-          const event = this.makeProcessedEvent(seeded);
-          try { localStorage.setItem(PROCESSED_KEY, JSON.stringify([event])); } catch { /* noop */ }
-          return [event];
-        }
       }
     } catch (err) {
       console.warn('已处理记录读取失败', err);
@@ -2844,7 +2840,10 @@ export class ReimburseBoard {
           if (att.written) localWritten.set(att.id, { written: true, voucherName: att.voucherName || '' });
         }
       }
-      const incoming = state.tasks.map((t) => this.normalizeTask(t));
+      const rawIncoming = state.tasks.map((t) => this.normalizeTask(t));
+      // 🔧 云端若残留内置示例任务，过滤掉并顺手删除，避免再次回到界面
+      const sampleIds = new Set(rawIncoming.filter((t) => isSampleTask(t)).map((t) => t.id));
+      const incoming = rawIncoming.filter((t) => !sampleIds.has(t.id));
       for (const task of incoming) {
         for (const att of task.attachments || []) {
           const local = localWritten.get(att.id);
@@ -2861,12 +2860,13 @@ export class ReimburseBoard {
         t.reimbursedAt, t.reimbursedFrom, t.content,
         (t.attachments || []).map((a) => a.id + ':' + (a.written ? 1 : 0)).join('|'),
       ].join('~')).join('\n');
-      const nextProc = Array.isArray(state.processedEvents) ? state.processedEvents : [];
+      const nextProc = (Array.isArray(state.processedEvents) ? state.processedEvents : [])
+        .filter((e) => !sampleIds.has(e.taskId));
       const sameTasks = sigOf(incoming) === sigOf(this.tasks || []);
       const sameProc = JSON.stringify(nextProc) === JSON.stringify(this.processedEvents || []);
       if (sameTasks && sameProc) return;
       this.tasks = incoming;
-      this.processedEvents = Array.isArray(state.processedEvents) ? state.processedEvents : [];
+      this.processedEvents = nextProc;
       try {
         localStorage.setItem(TASKS_KEY, JSON.stringify(this.tasks));
         localStorage.setItem(PROCESSED_KEY, JSON.stringify(this.processedEvents));
@@ -2874,6 +2874,14 @@ export class ReimburseBoard {
         console.warn('云端数据写入本地失败', err);
       }
       this.renderAll({ animate: false });
+      // 云端残留的示例任务：异步清除（写入墓碑，避免其它设备再同步回来）
+      if (sampleIds.size) {
+        for (const id of sampleIds) {
+          try {
+            Promise.resolve(this.cloud?.recordDeletion(id)).catch(() => {});
+          } catch { /* noop */ }
+        }
+      }
       if (!meta.silent) {
         this.toast(
           '云端数据已同步',
