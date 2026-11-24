@@ -3202,6 +3202,279 @@ export class ReimburseBoard {
     this._statementData = data;
   }
 
+  /** 月度现金流量表（ExcelJS 版）：成本明细的附件列直接嵌入缩略图 */
+  buildStatementWorkbookExcelJS(ExcelJS, data, attachmentData = { byTask: new Map() }) {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'GOODWORK FINANCE OS';
+    wb.created = new Date();
+    const units = BUSINESS_UNITS;
+    const thin = { style: 'thin', color: { argb: 'FF7F7F7F' } };
+    const border = { top: thin, bottom: thin, left: thin, right: thin };
+    const bodyFont = { name: '宋体', size: 10, color: { argb: 'FF1F1F1F' } };
+    const headFont = { name: '宋体', size: 10, bold: true, color: { argb: 'FF1F1F1F' } };
+    const linkFont = { name: '宋体', size: 10, color: { argb: 'FF1F5FA8' }, underline: true };
+    const grayFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE7E6E6' } };
+    const goldFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F0DE' } };
+    const moneyFmt = '#,##0.00';
+    const links = [];
+
+    // 先规划「成本明细」分组所在行号，供报表数字跳转
+    const buckets = new Map();
+    for (const t of data.tasks) {
+      const { unit, costRow, amount } = mapCostToStatement(t);
+      const key = `${costRow}|${unit}`;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push({ t, amount });
+    }
+    const groups = [];
+    let cursor = 5; // 标题 1 + 信息 2~4 + 表头 4，首组从第 5 行开始
+    for (const r of data.rows) {
+      for (const u of units) {
+        const list = buckets.get(`${r.label}|${u.key}`);
+        if (!list || !list.length) continue;
+        list.sort((a, b) => String(a.t.appliedAt).localeCompare(String(b.t.appliedAt)));
+        const sum = list.reduce((s, x) => s + x.amount, 0);
+        groups.push({ label: r.label, unit: u, list, sum, headerRow: cursor });
+        cursor += 1 + list.length;
+      }
+    }
+    const groupByKey = new Map(groups.map((g) => [`${g.label}|${g.unit.key}`, g]));
+    const firstGroupByRow = new Map();
+    for (const g of groups) if (!firstGroupByRow.has(g.label)) firstGroupByRow.set(g.label, g);
+
+    /* ---------- 月度现金流量表 ---------- */
+    const ws = wb.addWorksheet('月度现金流量表');
+    ws.columns = [
+      { width: 6 }, { width: 10 }, { width: 27 },
+      ...units.map(() => ({ width: 14 })), { width: 16 },
+    ];
+    const addRow = (values, height) => {
+      const row = ws.addRow(values);
+      if (height) row.height = height;
+      return row;
+    };
+    const title = addRow(['GOODWORK 车房现金流量表'], 30);
+    ws.mergeCells(`A${title.number}:K${title.number}`);
+    title.getCell(1).font = { name: '宋体', size: 16, bold: true, color: { argb: 'FF111111' } };
+    title.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+
+    const addMeta = (left, right) => {
+      const row = addRow([left, '', '', '', '', '', '', '', right, '', ''], 17);
+      ws.mergeCells(`A${row.number}:C${row.number}`);
+      ws.mergeCells(`I${row.number}:K${row.number}`);
+      const font = { name: '宋体', size: 9, color: { argb: 'FF444444' } };
+      row.getCell(1).font = font;
+      row.getCell(9).font = font;
+      return row;
+    };
+    addMeta('编制对象：GOOD WORK', `编制月份：${data.label}`);
+    addMeta('编制人：财务部', `账期：${data.start} 至 ${data.end}`);
+    addMeta('统计口径：当月已报销成本（含已补充附件）', '文件编号：1000 Y008');
+
+    const header = addRow(['行次', '项目', '', ...units.map((u) => u.label), '总额'], 25);
+    ws.mergeCells(`B${header.number}:C${header.number}`);
+    for (let c = 1; c <= 11; c++) {
+      const cell = header.getCell(c);
+      cell.font = headFont;
+      cell.fill = grayFill;
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = border;
+    }
+
+    const income = addRow(['1', '实际收入', '', '', '', '', '', '', '', '', ''], 18);
+    ws.mergeCells(`B${income.number}:C${income.number}`);
+    for (let c = 1; c <= 11; c++) {
+      const cell = income.getCell(c);
+      cell.font = bodyFont;
+      cell.fill = grayFill;
+      cell.border = border;
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+
+    const firstDataRow = 7;
+    data.rows.forEach((r, i) => {
+      const values = [
+        r.code,
+        i === 0 ? '运营支出' : '',
+        r.label,
+        ...units.map((u) => (r.unitAmounts[u.key] > 0 ? r.unitAmounts[u.key] : '')),
+        r.total > 0 ? r.total : '',
+      ];
+      const row = addRow(values, 18);
+      for (let c = 1; c <= 11; c++) {
+        const cell = row.getCell(c);
+        cell.font = bodyFont;
+        cell.border = border;
+        cell.alignment = {
+          horizontal: c === 3 ? 'left' : (c >= 4 ? 'right' : 'center'),
+          vertical: 'middle',
+          indent: c === 3 ? 1 : 0,
+        };
+        if (c >= 4) cell.numFmt = moneyFmt;
+      }
+    });
+    if (data.rows.length) {
+      ws.mergeCells(`B${firstDataRow}:B${firstDataRow + data.rows.length - 1}`);
+      ws.getCell(firstDataRow, 2).alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+
+    const subtotal = addRow(['32', '小计', '', ...units.map((u) => data.unitTotals[u.key] || 0), data.grand], 20);
+    ws.mergeCells(`B${subtotal.number}:C${subtotal.number}`);
+    for (let c = 1; c <= 11; c++) {
+      const cell = subtotal.getCell(c);
+      cell.font = headFont;
+      cell.fill = grayFill;
+      cell.border = border;
+      cell.alignment = { horizontal: c >= 4 ? 'right' : 'center', vertical: 'middle' };
+      if (c >= 4) cell.numFmt = moneyFmt;
+    }
+
+    addRow([], 10);
+    const note = addRow(['说明：点击表内金额可跳转至「成本明细」对应分类；成本按报销分类自动映射，待报销记录不计入本表。'], 24);
+    ws.mergeCells(`A${note.number}:K${note.number}`);
+    note.getCell(1).font = { name: '宋体', size: 9, italic: true, color: { argb: 'FF666666' } };
+    note.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+
+    const addLink = (rowNumber, colNumber, location, tooltip) => {
+      const cell = ws.getCell(rowNumber, colNumber);
+      cell.font = linkFont;
+      links.push({
+        ref: cell.address,
+        location: `'成本明细'!${location}`,
+        display: String(cell.value ?? ''),
+        tooltip,
+      });
+    };
+    data.rows.forEach((r, i) => {
+      const rowNumber = firstDataRow + i;
+      units.forEach((u, ui) => {
+        const value = r.unitAmounts[u.key] || 0;
+        if (value <= 0) return;
+        const hit = groupByKey.get(`${r.label}|${u.key}`);
+        if (hit) addLink(rowNumber, 4 + ui, `A${hit.headerRow}`, `${r.label} · ${u.label} 明细（${hit.list.length} 笔）`);
+      });
+      if (r.total > 0) {
+        const hit = firstGroupByRow.get(r.label);
+        if (hit) addLink(rowNumber, 11, `A${hit.headerRow}`, `${r.label} 全部明细`);
+      }
+    });
+    units.forEach((u, ui) => {
+      if ((data.unitTotals[u.key] || 0) > 0) {
+        addLink(subtotal.number, 4 + ui, 'A1', `${u.label} 相关明细（见「成本明细」页）`);
+      }
+    });
+    if (data.grand > 0) addLink(subtotal.number, 11, 'A1', '查看全部成本明细');
+
+    /* ---------- 成本明细（附件列嵌入缩略图） ---------- */
+    const ds = wb.addWorksheet('成本明细');
+    [8, 16, 13, 10, 10, 14, 12, 18, 12, 46, 40].forEach((w, i) => { ds.getColumn(i + 1).width = w; });
+
+    const dTitle = ds.addRow([`GOODWORK 车房 · 成本明细（${data.label}）`]);
+    ds.mergeCells(`A${dTitle.number}:K${dTitle.number}`);
+    dTitle.height = 26;
+    dTitle.getCell(1).font = { name: '宋体', size: 14, bold: true, color: { argb: 'FF111111' } };
+    dTitle.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+    const dMeta = ds.addRow([`账期：${data.start} 至 ${data.end}`, '', '', '', `生成于 ${data.generatedAt}`]);
+    dMeta.height = 16;
+    dMeta.getCell(1).font = { name: '宋体', size: 9, color: { argb: 'FF666666' } };
+    dMeta.getCell(5).font = { name: '宋体', size: 9, color: { argb: 'FF666666' } };
+    ds.addRow([]);
+    const dHead = ds.addRow(['明细号', '成本项目', '业务单元', '申请人', '部门', '报销类别', '金额', '申请日期', '状态', '说明', '附件']);
+    dHead.height = 22;
+    for (let c = 1; c <= 11; c++) {
+      const cell = dHead.getCell(c);
+      cell.font = headFont;
+      cell.fill = grayFill;
+      cell.border = border;
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    }
+
+    let seq = 0;
+    let embeddedRows = 0;
+    for (const g of groups) {
+      const gRow = ds.addRow([`【${g.label} · ${g.unit.label}】 共 ${g.list.length} 笔 · 合计 ¥${money(g.sum)}`]);
+      ds.mergeCells(`A${gRow.number}:K${gRow.number}`);
+      gRow.height = 22;
+      for (let c = 1; c <= 11; c++) {
+        const cell = gRow.getCell(c);
+        cell.fill = goldFill;
+        cell.border = border;
+        cell.font = { name: '宋体', size: 10, bold: true, color: { argb: 'FF7A5B1E' } };
+      }
+      gRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
+      for (const { t: task, amount } of g.list) {
+        seq += 1;
+        const row = ds.addRow([
+          seq,
+          g.label,
+          g.unit.label,
+          task.applicant || '',
+          task.department || '',
+          task.category || '',
+          amount,
+          formatDateTime(task.appliedAt),
+          STATUS_LABEL[task.status] || task.status,
+          String(task.content || ''),
+          '',
+        ]);
+        row.height = 20;
+        for (let c = 1; c <= 11; c++) {
+          const cell = row.getCell(c);
+          cell.font = bodyFont;
+          cell.border = border;
+          cell.alignment = {
+            horizontal: c === 10 ? 'left' : (c === 7 || c === 8 ? 'right' : 'center'),
+            vertical: 'middle',
+            wrapText: c === 10,
+            indent: c === 10 ? 1 : 0,
+          };
+          if (c === 7) cell.numFmt = moneyFmt;
+        }
+        const section = attachmentData.byTask?.get(task.id);
+        const cell = row.getCell(11);
+        if (section && section.items.length) {
+          if (section.strip) {
+            cell.value = '';
+            try {
+              const imageId = wb.addImage({ base64: section.strip, extension: 'png' });
+              ds.addImage(imageId, {
+                tl: { col: 10.02, row: row.number - 1 + 0.03 },
+                ext: { width: 276, height: 94 },
+                editAs: 'oneCell',
+              });
+              row.height = 76;
+              embeddedRows += 1;
+            } catch (err) {
+              console.warn('成本明细附件缩略图嵌入失败', err);
+              cell.value = `${section.items.length} 个附件`;
+            }
+          } else {
+            cell.value = `${section.items.length} 个附件`;
+          }
+          cell.font = { name: '宋体', size: 9, color: { argb: 'FF6B5330' } };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        } else {
+          cell.value = '—';
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        }
+      }
+    }
+    ds.addRow([]);
+    const totalRow = ds.addRow(['合计', '', '', '', '', '', data.recognized, '', '', '', '']);
+    totalRow.height = 20;
+    for (let c = 1; c <= 11; c++) {
+      const cell = totalRow.getCell(c);
+      cell.fill = goldFill;
+      cell.border = border;
+      cell.font = headFont;
+      cell.alignment = { horizontal: c === 7 ? 'right' : 'center', vertical: 'middle' };
+      if (c === 7) cell.numFmt = moneyFmt;
+    }
+
+    wb.__goodworkLinks = { detail: links, embeddedRows, seq };
+    return wb;
+  }
+
   /** 月度报表「成本明细」工作表：按成本项目 × 业务单元分组，供报表数字点击跳转 */
   buildStatementDetailSheet(XLSX, data) {
     const aoa = [
@@ -3482,10 +3755,44 @@ export class ReimburseBoard {
     const btn = $('[data-rb="statement-export"]', this.root);
     if (btn) btn.disabled = true;
     try {
-      const XLSX = await this.loadXLSX();
-      const wb = this.buildStatementWorkbook(XLSX, data);
-      const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true });
-      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      let blob;
+      let embedNote = '';
+      try {
+        // 优先 ExcelJS：成本明细附件列可嵌入缩略图
+        const ExcelJS = await this.loadExcelJS();
+        const attachmentData = await this.prepareExcelAttachments(
+          { tasks: data.tasks },
+          { width: 276, height: 94, cellWidth: 84, cellHeight: 82 }
+        );
+        const wb = this.buildStatementWorkbookExcelJS(ExcelJS, data, attachmentData);
+        const links = wb.__goodworkLinks || { detail: [] };
+        const buffer = await wb.xlsx.writeBuffer();
+        let finalBuffer = buffer;
+        if (links.detail.length) {
+          try {
+            const fflate = await this.loadFFlate();
+            const patched = this.injectInternalHyperlinks(
+              fflate,
+              buffer,
+              { detail: links.detail },
+              { detail: '月度现金流量表' }
+            );
+            if (patched) finalBuffer = patched;
+          } catch (linkErr) {
+            console.warn('月度报表内部链接写入失败', linkErr);
+          }
+        }
+        blob = new Blob([finalBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        if (attachmentData.byTask.size) {
+          embedNote = ` · ${attachmentData.byTask.size} 笔附件的缩略图已嵌入成本明细`;
+        }
+      } catch (excelJsErr) {
+        console.warn('月度报表附件嵌入失败，回退到普通 Excel', excelJsErr);
+        const XLSX = await this.loadXLSX();
+        const wb = this.buildStatementWorkbook(XLSX, data);
+        const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array', cellStyles: true });
+        blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      }
       const fileName = `GOODWORK_月度现金流量表_${data.month}.xlsx`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -3505,7 +3812,7 @@ export class ReimburseBoard {
           console.warn('月度财务报表写入 D 盘失败', err);
         }
       }
-      this.toast('月度财务报表已导出', `${data.label} · ${data.count} 笔已报销成本 · 与图片表格同版式。`, 'ok');
+      this.toast('月度财务报表已导出', `${data.label} · ${data.count} 笔已报销成本${embedNote}。`, 'ok');
     } catch (err) {
       console.error(err);
       this.toast('导出失败', err?.message || '请稍后重试。');
@@ -3673,7 +3980,7 @@ export class ReimburseBoard {
     return window.fflate;
   }
 
-  injectInternalHyperlinks(fflate, buffer, links) {
+  injectInternalHyperlinks(fflate, buffer, links, sheetNames = { detail: '报销明细', files: '附件清单' }) {
     const escAttr = (value) => String(value)
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -3708,13 +4015,26 @@ export class ReimburseBoard {
       if (!path || !zip[path]) return;
       let xml = read(path);
       if (!xml || xml.includes('<hyperlinks')) return;
-      const block = `<hyperlinks>${items.map((item) => `<hyperlink ref="${escAttr(item.ref)}" location="${escAttr(item.location)}" display="${escAttr(item.display)}"/>`).join('')}</hyperlinks>`;
-      if (xml.includes('<pageMargins')) xml = xml.replace('<pageMargins', `${block}<pageMargins`);
-      else xml = xml.replace('</worksheet>', `${block}</worksheet>`);
+      const attrs = (item) => [
+        `ref="${escAttr(item.ref)}"`,
+        `location="${escAttr(item.location)}"`,
+        item.display != null ? `display="${escAttr(item.display)}"` : '',
+        item.tooltip ? `tooltip="${escAttr(item.tooltip)}"` : '',
+      ].filter(Boolean).join(' ');
+      const block = `<hyperlinks>${items.map((item) => `<hyperlink ${attrs(item)}/>`).join('')}</hyperlinks>`;
+      let placed = false;
+      for (const marker of ['<pageMargins', '<printOptions', '<pageSetup', '<headerFooter', '<drawing', '<legacyDrawing']) {
+        if (xml.includes(marker)) {
+          xml = xml.replace(marker, `${block}${marker}`);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) xml = xml.replace('</worksheet>', `${block}</worksheet>`);
       zip[path] = fflate.strToU8(xml);
     };
-    inject('报销明细', links.detail);
-    inject('附件清单', links.files);
+    inject(sheetNames.detail, links.detail || []);
+    if (sheetNames.files) inject(sheetNames.files, links.files || []);
     return fflate.zipSync(zip, { level: 6 });
   }
 
@@ -3753,9 +4073,11 @@ export class ReimburseBoard {
     }
   }
 
-  async makeAttachmentStrip(items) {
-    const W = 186;
-    const H = 62;
+  async makeAttachmentStrip(items, opts = {}) {
+    const W = opts.width || 186;
+    const H = opts.height || 62;
+    const cellW = opts.cellWidth || 56;
+    const cellH = opts.cellHeight || 52;
     const canvas = document.createElement('canvas');
     canvas.width = W;
     canvas.height = H;
@@ -3766,39 +4088,41 @@ export class ReimburseBoard {
     ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
     let x = 4;
     let shown = 0;
+    const gap = 4;
+    const maxShown = Math.max(1, Math.floor((W - 8 + gap) / (cellW + gap)));
     for (const item of items) {
-      if (shown >= 3 || x + 56 > W - 4) break;
+      if (shown >= maxShown || x + cellW > W - 4) break;
       if (item.image) {
         try {
           const img = await this.loadImageFromUrl(`data:image/png;base64,${item.image.base64}`);
           const iw = img.naturalWidth || img.width || 1;
           const ih = img.naturalHeight || img.height || 1;
-          const ratio = Math.max(56 / iw, 52 / ih);
-          const sw = 56 / ratio;
-          const sh = 52 / ratio;
+          const ratio = Math.max(cellW / iw, cellH / ih);
+          const sw = cellW / ratio;
+          const sh = cellH / ratio;
           const sx = (iw - sw) / 2;
           const sy = (ih - sh) / 2;
-          ctx.drawImage(img, sx, sy, sw, sh, x, 5, 56, 52);
+          ctx.drawImage(img, sx, sy, sw, sh, x, 5, cellW, cellH);
         } catch {
           ctx.fillStyle = '#ffffff';
-          ctx.fillRect(x, 5, 56, 52);
+          ctx.fillRect(x, 5, cellW, cellH);
         }
       } else {
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(x, 5, 56, 52);
+        ctx.fillRect(x, 5, cellW, cellH);
         const ext = (String(item.name).match(/\.([A-Za-z0-9]{1,5})$/) || [])[1] || 'DOC';
         ctx.fillStyle = '#b08d57';
-        ctx.font = 'bold 13px sans-serif';
+        ctx.font = `bold ${Math.max(10, Math.round(cellW * 0.23))}px sans-serif`;
         ctx.textAlign = 'center';
-        ctx.fillText(ext.toUpperCase(), x + 28, 35);
+        ctx.fillText(ext.toUpperCase(), x + cellW / 2, 5 + cellH * 0.58);
         ctx.fillStyle = '#8a8a8a';
-        ctx.font = '8px sans-serif';
-        ctx.fillText('文档', x + 28, 48);
+        ctx.font = `${Math.max(7, Math.round(cellW * 0.14))}px sans-serif`;
+        ctx.fillText('文档', x + cellW / 2, 5 + cellH * 0.83);
       }
       ctx.strokeStyle = '#cfc7b6';
-      ctx.strokeRect(x + 0.5, 5.5, 55, 51);
+      ctx.strokeRect(x + 0.5, 5.5, cellW - 1, cellH - 1);
       shown++;
-      x += 60;
+      x += cellW + gap;
     }
     if (items.length > shown) {
       ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
@@ -3811,7 +4135,7 @@ export class ReimburseBoard {
     return canvas.toDataURL('image/png').split(',')[1];
   }
 
-  async prepareExcelAttachments(stats) {
+  async prepareExcelAttachments(stats, stripOpts = {}) {
     const byTask = new Map();
     const previewTasks = [];
     let imageCount = 0;
@@ -3850,7 +4174,7 @@ export class ReimburseBoard {
       if (items.length) {
         const entry = { task, items, strip: '', sectionRow: 0 };
         try {
-          entry.strip = await this.makeAttachmentStrip(items);
+          entry.strip = await this.makeAttachmentStrip(items, stripOpts);
         } catch (err) {
           console.warn('附件缩略图生成失败', err);
         }
