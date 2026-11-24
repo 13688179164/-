@@ -7,7 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261124v923';
-import { CloudSync } from '../core/cloudSync.js?v=20261123v922';
+import { CloudSync } from '../core/cloudSync.js?v=20261124v928';
 
 // 历史遗留的内置示例任务（GW-RB-SAMPLE-*），一律过滤不再展示/同步
 function isSampleTask(t) {
@@ -318,10 +318,16 @@ export class ReimburseBoard {
     // 🔧 不再覆盖 getState —— 让 CloudSync 自己从 localStorage 读（更可靠，不依赖 ReimburseBoard 是否初始化完成）
     // this.cloud.getState = () => this.getCloudState();
     this.cloud.applyState = (state, meta) => this.applyCloudState(state, meta);
+    this.cloud.getAttachmentBlob = (id) => readAttachmentBlob(id);
+    this.cloud.onAttachmentsUploaded = () => this.persistTasks();
     this.cloud.onStatus = (status, detail) => this.onCloudStatus(status, detail);
     this.cloud.onToast = (title, desc, type) => this.toast(title, desc, type);
     window.__cloudSync = this.cloud;
     window.__cloudSyncApp = this.cloud;
+    if (this.cloud.isConnected()) {
+      this.cloud.syncAllAttachments({ silent: true })
+        .catch((err) => console.warn('历史附件补传失败', err));
+    }
     this.cloud.onStatus(this.cloud.status, this.cloud.getStatus());
     console.log('%c[ReimburseBoard] CloudSync 实例就绪', 'color:#0a6', `connected=${this.cloud.isConnected()}`);
     // 如果还没连，手动 init 一次

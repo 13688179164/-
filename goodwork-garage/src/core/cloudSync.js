@@ -1,8 +1,8 @@
 /**
  * 腾讯云开发 PostgreSQL 同步 —— 纯 fetch 版本（零 SDK 依赖）
- * CloudSync v9.1
+ * CloudSync v10.0 · 支持附件云端上传与跨设备下载
  */
-const CLOUD_SYNC_VERSION = 'v9.1-pure-fetch';
+const CLOUD_SYNC_VERSION = 'v10.0-cloud-attachments';
 const SETTINGS_KEY = 'goodwork.cloud.settings.v1';
 const DEVICE_KEY = 'goodwork.cloud.device.v1';
 const DEFAULT_ENV_ID = 'attractive-starfish-d0bp2e865971';
@@ -10,6 +10,47 @@ const DEFAULT_ENV_ID = 'attractive-starfish-d0bp2e865971';
 const PUBLISHABLE_KEY = 'eyJhbGciOiJSUzI1NiIsImtpZCI6IjIxMTE1ZTA4LWJjYjQtNGViZS1iMzQ2LTRkMDBhOWUxMWY4NCJ9.eyJpc3MiOiJodHRwczovL2F0dHJhY3RpdmUtc3RhcmZpc2gtZDBicDJlODY1OTcxLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsImV4cCI6NDA5OTEwNDgzOCwiaWF0IjoxNzk1NDIxNjM4LCJub25jZSI6IkM2OXNFOVRWU2E2N09TRmNfbEFBLWciLCJhdF9oYXNoIjoiQzY5c0U5VFZTYTY3T1NGY19sQUEtZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.BbEqc_mku1-zXHvEAI3bUhUyDfjlkPhbyE_gHrUsF2mDuc0FlgskbZ9qziNP9Bk3gW4mWNDetSt7fq70Z6Y3fsypBOZz9MGb5Hgf1Cm1LPZsdXi8Vaw5nDnUnR9wx6YgxhjGYUwI9hYRGMmy7FR4YtRZMQC9wR0VJAda6G1Ac_YF00R1Ptdw_ljUmyB5-W5osDiklvP_XcsbboR4ph9Poo8tCJtpzDkIhvZ9A0ypSfM9HZnqHRpV-X3VJy3fDyeQ6tKZGt6iCbrUuFDqUXBZ8oCCRWAYXKS2gUg5OyGa538Sj6llJDlJxJjEqgz9lfaiWRnYuGTQv78E-5WEkdINuA';
 const POLL_INTERVAL_MS = 3000;
 const PUSH_DEBOUNCE_MS = 1500;
+const DB_ATTACHMENT_PREFIX = 'attachment:';
+const STORAGE_BUCKET = 'goodwork';
+let cloudBaseSdkPromise = null;
+
+function loadCloudBaseSDK() {
+  if (typeof window !== 'undefined' && window.cloudbase?.init) {
+    return Promise.resolve(window.cloudbase);
+  }
+  if (!cloudBaseSdkPromise) {
+    cloudBaseSdkPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = new URL('../../vendor/cloudbase.full.js', import.meta.url).href;
+      script.onload = () => {
+        if (window.cloudbase?.init) resolve(window.cloudbase);
+        else reject(new Error('CloudBase SDK 加载后不可用。'));
+      };
+      script.onerror = () => reject(new Error('CloudBase SDK 加载失败，请检查网络后重试。'));
+      document.head.appendChild(script);
+    }).catch((err) => {
+      cloudBaseSdkPromise = null;
+      throw err;
+    });
+  }
+  return cloudBaseSdkPromise;
+}
+
+async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+  }
+  return btoa(binary);
+}
+
+function base64ToBlob(base64, type = '') {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: type || 'application/octet-stream' });
+}
 
 // ========== PostgREST 辅助函数 ==========
 
@@ -480,6 +521,43 @@ export class CloudSync {
     };
   }
 
+  hydrateTaskAttachments(rows, attachRows) {
+    const attachByTask = new Map();
+    for (const a of attachRows || []) {
+      const list = attachByTask.get(a.task_id) || [];
+      list.push(a);
+      attachByTask.set(a.task_id, list);
+    }
+    return (rows || []).map((row) => {
+      const task = this.rowToTask(row);
+      const linked = attachByTask.get(row.id) || [];
+      if (linked.length) {
+        task.attachments = linked.map((a) => ({
+          id: a.id,
+          cloudFileId: a.cloud_file_id || '',
+          name: a.name || '',
+          size: Number(a.size) || 0,
+          type: a.mime_type || '',
+        }));
+      }
+      if (!task.attachments?.length && row.cloud_file_ids) {
+        try {
+          const ids = typeof row.cloud_file_ids === 'string' ? JSON.parse(row.cloud_file_ids) : row.cloud_file_ids;
+          if (Array.isArray(ids)) {
+            task.attachments = ids.map((item) => ({
+              id: item.id,
+              cloudFileId: item.cloudFileId || '',
+              name: item.name || '',
+              size: Number(item.size) || 0,
+              type: item.type || '',
+            }));
+          }
+        } catch { /* 忽略旧字段中的无效 JSON */ }
+      }
+      return task;
+    });
+  }
+
   taskToRow(task, updatedAt) {
     // 🔧 PostgreSQL 字段长度保护（已实测）：
     //    id varchar(40) / writer_device_id varchar(40)
@@ -559,13 +637,6 @@ export class CloudSync {
       } catch { attachRows = []; }
     }
 
-    const attachByTask = new Map();
-    for (const a of attachRows) {
-      const list = attachByTask.get(a.task_id) || [];
-      list.push(a);
-      attachByTask.set(a.task_id, list);
-    }
-
     let processed = [];
     try {
       processed = await withTimeout(
@@ -575,27 +646,8 @@ export class CloudSync {
       );
     } catch { processed = []; }
 
-    const remoteTasks = rows.map((r) => {
-      const t = this.rowToTask(r);
-      const linked = attachByTask.get(r.id) || [];
-      if (linked.length) {
-        t.attachments = linked.map((a) => ({
-          id: a.id, cloudFileId: a.cloud_file_id || '', name: a.name || '',
-          size: Number(a.size) || 0, type: a.mime_type || '',
-        }));
-      }
-      if (!t.attachments?.length && r.cloud_file_ids) {
-        try {
-          const cids = typeof r.cloud_file_ids === 'string' ? JSON.parse(r.cloud_file_ids) : r.cloud_file_ids;
-          if (Array.isArray(cids)) {
-            t.attachments = cids.map((c) => ({
-              id: c.id, cloudFileId: c.cloudFileId || '', name: '', size: 0, type: '',
-            }));
-          }
-        } catch { /* noop */ }
-      }
-      return t;
-    }).filter((t) => !this.isTombstoned(t));
+    const remoteTasks = this.hydrateTaskAttachments(rows, attachRows)
+      .filter((t) => !this.isTombstoned(t));
 
     const remoteProcessed = processed.map((r) => ({
       taskId: r.task_id,
@@ -844,10 +896,13 @@ export class CloudSync {
       //    避免某台设备用"旧副本"覆盖另一台设备刚保存的新内容。
       let remoteTasks = [];
       try {
-        const rRows = await pgRequest('GET', this.envId, 'goodwork_tasks', {
-          select: '*', order: ['updated_at.desc'], limit: 5000,
-        });
-        remoteTasks = rRows.map((r) => this.rowToTask(r));
+        const [rRows, attachmentRows] = await Promise.all([
+          pgRequest('GET', this.envId, 'goodwork_tasks', {
+            select: '*', order: ['updated_at.desc'], limit: 5000,
+          }),
+          pgRequest('GET', this.envId, 'goodwork_attachments', { select: '*' }),
+        ]);
+        remoteTasks = this.hydrateTaskAttachments(rRows, attachmentRows);
       } catch (e) {
         console.warn('[cloudSync] push 前拉取云端失败，跳过合并:', e?.message);
       }
@@ -1027,7 +1082,7 @@ export class CloudSync {
       // 🔧 同步删除墓碑：其他设备的删除要传到本机
       await this.loadTombstonesFromCloud();
 
-      const remoteAllTasks = rows.map((r) => this.rowToTask(r))
+      let remoteAllTasks = rows.map((r) => this.rowToTask(r))
         .filter((t) => !this.isTombstoned(t));
       const local = this.getState();
       const localTasks = (local.tasks || []).filter((t) => !this.isTombstoned(t));
@@ -1065,6 +1120,14 @@ export class CloudSync {
         }
         this.lastPollAt = Date.now();
         return;
+      }
+
+      // 有新任务时同时拉附件元数据，避免用空附件列表覆盖本地。
+      // 读取失败会直接进入外层 catch，本轮不合并，等待下次轮询。
+      if (hasNewRemoteTask) {
+        const attachmentRows = await pgRequest('GET', this.envId, 'goodwork_attachments', { select: '*' });
+        remoteAllTasks = this.hydrateTaskAttachments(rows, attachmentRows)
+          .filter((t) => !this.isTombstoned(t));
       }
 
       // 有新的云端数据 → 合并（按 id 取 updatedAt 较新），不要拉全量覆盖本地！
@@ -1119,34 +1182,182 @@ export class CloudSync {
     }
   }
 
-  // ========== 附件（纯 fetch 版暂不支持云存储 —— 用 IndexedDB 本地缓存）==========
-  // 注：云存储需要 SDK 的 uploadFile / getTempFileURL，这里没有 SDK。
-  // 附件元数据已通过 goodwork_attachments 表同步，blob 保留在本地 IndexedDB。
+  // ========== 附件云存储（业务数据仍走纯 fetch PostgreSQL）==========
+
+  async ensureStorageApp() {
+    const envId = this.envId;
+    if (this._storageAppPromise && this._storageAppEnvId === envId) {
+      return this._storageAppPromise;
+    }
+    this._storageAppEnvId = envId;
+    this._storageAppPromise = (async () => {
+      const cloudbase = await loadCloudBaseSDK();
+      const app = cloudbase.init({
+        env: envId,
+        accessKey: PUBLISHABLE_KEY,
+        apiOrigin: `https://${envId}.api.tcloudbasegateway.com`,
+      });
+      const auth = app.auth();
+      if (auth?.signInAnonymously) {
+        await withTimeout(auth.signInAnonymously(), 20000, '附件云端匿名登录超时。');
+      }
+      return app;
+    })();
+    try {
+      return await this._storageAppPromise;
+    } catch (err) {
+      this._storageAppPromise = null;
+      throw err;
+    }
+  }
 
   async uploadAttachment(meta, blob) {
-    // 纯 fetch 版本跳过云存储上传（blob 保留本地）
-    // 附件元数据会在 pushNow 里通过 goodwork_attachments 表同步
-    return '';
+    if (!blob) throw new Error('本地附件缓存不存在，无法上传。');
+    const id = String(meta?.id || '');
+    if (!id) throw new Error('附件缺少有效 ID，无法上传。');
+    const data = await blobToBase64(blob);
+    const value = JSON.stringify({
+      v: 1,
+      name: meta.name || '附件',
+      size: Number(meta.size) || blob.size || 0,
+      type: meta.type || blob.type || 'application/octet-stream',
+      data,
+    });
+    await withTimeout(
+      pgRequest('POST', this.envId, 'goodwork_meta', {
+        body: [{ key: `${DB_ATTACHMENT_PREFIX}${id}`, value, updated_at: nowIso() }],
+        prefer: 'resolution=merge-duplicates',
+      }),
+      60000,
+      `附件「${meta.name || id}」上传超时。`
+    );
+    return `db:${id}`;
   }
 
   async downloadAttachment(fileID) {
-    throw new Error('纯 fetch 版本暂不支持云端附件下载，请升级到完整 SDK 版本。');
+    if (!fileID) throw new Error('附件尚未上传到云端。');
+    if (String(fileID).startsWith('db:')) {
+      const id = String(fileID).slice(3);
+      const rows = await withTimeout(
+        pgRequest('GET', this.envId, 'goodwork_meta', {
+          select: 'value',
+          filter: { key: `eq.${DB_ATTACHMENT_PREFIX}${id}` },
+          limit: 1,
+        }),
+        60000,
+        '云端附件下载超时。'
+      );
+      const value = rows?.[0]?.value;
+      if (!value) throw new Error('云端附件内容不存在。');
+      let payload;
+      try { payload = JSON.parse(value); } catch { throw new Error('云端附件内容格式无效。'); }
+      if (!payload?.data) throw new Error('云端附件内容为空。');
+      return base64ToBlob(payload.data, payload.type);
+    }
+    const app = await this.ensureStorageApp();
+    if (String(fileID).startsWith('pg:')) {
+      const path = String(fileID).slice(3);
+      const result = await withTimeout(
+        app.storage.from(STORAGE_BUCKET).download(path),
+        60000,
+        '云端附件下载超时。'
+      );
+      if (result?.error) throw result.error;
+      const data = result?.data ?? result;
+      if (data instanceof Blob) return data;
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) return new Blob([data]);
+      throw new Error('云端附件下载返回格式无效。');
+    }
+    if (String(fileID).startsWith('cloud://')) {
+      const result = await app.getTempFileURL({ fileList: [fileID] });
+      const item = result?.fileList?.[0];
+      if (!item?.tempFileURL) throw new Error(item?.errMsg || '未能获取旧附件下载地址。');
+      const response = await fetch(item.tempFileURL);
+      if (!response.ok) throw new Error(`旧附件下载失败（HTTP ${response.status}）。`);
+      return response.blob();
+    }
+    throw new Error('无法识别附件的云端文件 ID。');
+  }
+
+  async uploadTaskAttachments(task) {
+    const result = { uploaded: 0, failed: 0, missing: 0 };
+    for (const meta of task?.attachments || []) {
+      if (meta.cloudFileId) continue;
+      let blob = null;
+      try { blob = await this.getAttachmentBlob(meta.id); } catch { blob = null; }
+      if (!blob) {
+        result.missing++;
+        continue;
+      }
+      try {
+        const fileId = await this.uploadAttachment(meta, blob);
+        if (!fileId) throw new Error('云端未返回文件 ID。');
+        meta.cloudFileId = fileId;
+        result.uploaded++;
+      } catch (err) {
+        result.failed++;
+        console.warn('[cloudSync] 附件上传失败:', meta.name, err?.message || err);
+      }
+    }
+    if (result.uploaded > 0) task.updatedAt = nowIso();
+    return result;
   }
 
   async syncTaskAttachments(task) {
-    if (!this.connected) return 0;
-    // 纯 fetch 版本：只同步附件元数据到 goodwork_attachments 表（已在 pushNow 里做）
-    // blob 仍留在本地 IndexedDB
-    this.markLocalChange();
-    return 0;
+    if (!this.connected || !task || this.uploading) return 0;
+    this.uploading = true;
+    try {
+      const result = await this.uploadTaskAttachments(task);
+      if (result.uploaded > 0) {
+        this.onAttachmentsUploaded();
+        await this.pushNow({ force: true, silent: true, _internal: true });
+      }
+      if (result.failed > 0) {
+        this.onToast('部分附件上传失败', `${result.failed} 个附件将在下次同步时重试。`);
+      }
+      return result.uploaded;
+    } finally {
+      this.uploading = false;
+    }
   }
 
   async syncAllAttachments({ silent = false } = {}) {
-    if (!this.connected) return 0;
-    // 触发一次 push 让附件元数据同步
-    await this.pushNow({ force: true, silent: true, _internal: true });
-    this.emit('connected');
-    return 0;
+    if (!this.connected || this.uploading) return 0;
+    this.uploading = true;
+    const total = { uploaded: 0, failed: 0, missing: 0 };
+    try {
+      const state = this.getState();
+      const tasks = state.tasks || [];
+      for (const task of tasks) {
+        const result = await this.uploadTaskAttachments(task);
+        total.uploaded += result.uploaded;
+        total.failed += result.failed;
+        total.missing += result.missing;
+      }
+      if (total.uploaded > 0) {
+        this.applying = true;
+        try {
+          this.applyState(
+            { tasks, processedEvents: state.processedEvents || [] },
+            { source: 'cloud', silent: true }
+          );
+        } finally {
+          this.applying = false;
+        }
+        this.markLocalChange();
+        await this.pushNow({ force: true, silent: true, _internal: true });
+      }
+      this.emit('connected');
+      if (!silent) {
+        const detail = `${total.uploaded} 个上传成功`
+          + (total.failed ? ` · ${total.failed} 个失败` : '')
+          + (total.missing ? ` · ${total.missing} 个本地无缓存` : '');
+        this.onToast(total.failed ? '附件同步未全部完成' : '附件云同步完成', detail, total.failed ? '' : 'ok');
+      }
+      return total.uploaded;
+    } finally {
+      this.uploading = false;
+    }
   }
 
   setAutoSync(value) {
