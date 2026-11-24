@@ -98,66 +98,94 @@ function ellipseRingGeometry(rx, rz, width, segments, y) {
   return geo;
 }
 
+function makeCarShadowTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(32, 32, 3, 32, 32, 31);
+  grad.addColorStop(0, 'rgba(0, 0, 0, 0.62)');
+  grad.addColorStop(0.55, 'rgba(0, 0, 0, 0.3)');
+  grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function createCarFleet(scene) {
-  const bodyGeo = new RoundedBoxGeometry(1.12, 0.26, 0.5, 2, 0.07);
-  bodyGeo.translate(0, 0.25, 0);
-  const cabinGeo = new RoundedBoxGeometry(0.54, 0.22, 0.44, 2, 0.05);
-  cabinGeo.translate(-0.06, 0.45, 0);
-  const wheelGeo = new THREE.CylinderGeometry(0.145, 0.145, 0.12, 12);
+  const bodyGeo = new RoundedBoxGeometry(1.14, 0.26, 0.48, 3, 0.07);
+  bodyGeo.translate(0, 0.27, 0);
+  const roofGeo = new RoundedBoxGeometry(0.5, 0.04, 0.4, 2, 0.02);
+  roofGeo.translate(-0.07, 0.585, 0);
+  const cabinGeo = new RoundedBoxGeometry(0.56, 0.23, 0.42, 2, 0.05);
+  cabinGeo.translate(-0.07, 0.47, 0);
+  const wheelGeo = new THREE.CylinderGeometry(0.155, 0.155, 0.13, 14);
   wheelGeo.rotateX(Math.PI / 2);
-  const headGeo = new RoundedBoxGeometry(0.04, 0.06, 0.14, 1, 0.02);
-  headGeo.translate(0.56, 0.27, 0);
-  const tailGeo = new RoundedBoxGeometry(0.04, 0.055, 0.4, 1, 0.02);
-  tailGeo.translate(-0.56, 0.3, 0);
+  const rimGeo = new THREE.CylinderGeometry(0.082, 0.082, 0.138, 12);
+  rimGeo.rotateX(Math.PI / 2);
+  const headGeo = new RoundedBoxGeometry(0.04, 0.06, 0.16, 1, 0.02);
+  headGeo.translate(0.57, 0.29, 0);
+  const tailGeo = new RoundedBoxGeometry(0.04, 0.055, 0.42, 1, 0.02);
+  tailGeo.translate(-0.57, 0.32, 0);
+  const shadowGeo = new THREE.PlaneGeometry(1.6, 0.82);
+  shadowGeo.rotateX(-Math.PI / 2);
 
   const count = 8;
   const bodyMat = new THREE.MeshPhysicalMaterial({
-    color: '#ffffff', metalness: 0.68, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.1, envMapIntensity: 1.3,
+    color: '#ffffff', metalness: 0.62, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.05, envMapIntensity: 1.55,
   });
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: '#0d1620', metalness: 0.4, roughness: 0.08, envMapIntensity: 1.4,
+    color: '#0a131c', metalness: 0.5, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.8,
   });
-  const tireMat = new THREE.MeshStandardMaterial({ color: '#111318', roughness: 0.95 });
-  const headMat = new THREE.MeshStandardMaterial({ color: '#fff7e0', emissive: '#ffdda0', emissiveIntensity: 1.0, roughness: 0.3 });
-  const tailMat = new THREE.MeshStandardMaterial({ color: '#8c1c1c', emissive: '#ff4438', emissiveIntensity: 1.0, roughness: 0.4 });
+  const tireMat = new THREE.MeshStandardMaterial({ color: '#0c0e12', roughness: 0.9, metalness: 0.04 });
+  const rimMat = new THREE.MeshStandardMaterial({ color: '#d9d2c2', metalness: 0.95, roughness: 0.2, envMapIntensity: 1.6 });
+  const headMat = new THREE.MeshStandardMaterial({ color: '#fff7e0', emissive: '#ffdda0', emissiveIntensity: 1.2, roughness: 0.25 });
+  const tailMat = new THREE.MeshStandardMaterial({ color: '#8c1c1c', emissive: '#ff4438', emissiveIntensity: 1.1, roughness: 0.35 });
+  const shadowMat = new THREE.MeshBasicMaterial({ map: makeCarShadowTexture(), transparent: true, opacity: 0.85, depthWrite: false });
 
   const bodies = new THREE.InstancedMesh(bodyGeo, bodyMat, count);
+  const roofs = new THREE.InstancedMesh(roofGeo, bodyMat, count);
   const cabins = new THREE.InstancedMesh(cabinGeo, glassMat, count);
   const wheels = new THREE.InstancedMesh(wheelGeo, tireMat, count * 4);
+  const rims = new THREE.InstancedMesh(rimGeo, rimMat, count * 4);
   const heads = new THREE.InstancedMesh(headGeo, headMat, count);
   const tails = new THREE.InstancedMesh(tailGeo, tailMat, count);
+  const shadows = new THREE.InstancedMesh(shadowGeo, shadowMat, count);
   bodies.userData.interactiveKey = 'traffic';
-  cabins.userData.interactiveKey = 'traffic';
-  bodies.castShadow = false;
+  roofs.userData.interactiveKey = 'traffic';
+  rims.userData.interactiveKey = 'traffic';
   bodies.receiveShadow = true;
-  bodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  cabins.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  wheels.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  heads.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  tails.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  bodies.frustumCulled = false;
-  cabins.frustumCulled = false;
-  wheels.frustumCulled = false;
-  heads.frustumCulled = false;
-  tails.frustumCulled = false;
+  for (const m of [bodies, roofs, cabins, wheels, rims, heads, tails, shadows]) {
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.frustumCulled = false;
+  }
+  shadows.renderOrder = 1;
 
   const palette = ['#c9b488', '#7e2733', '#31526c', '#d8d4c8', '#3f5f4a', '#6b4e87', '#a85f37', '#343a42'];
   const cars = [];
   const dummy = new THREE.Object3D();
+  const wheelDummy = new THREE.Object3D();
+  wheelDummy.rotation.order = 'YXZ';
   for (let i = 0; i < count; i++) {
     const c = new THREE.Color(palette[i]);
     bodies.setColorAt(i, c);
+    roofs.setColorAt(i, c);
     const phase = (i / count) * Math.PI * 2 + rnd() * 0.2;
     cars.push({ phase, speed: 0.075 + rnd() * 0.035, radiusOffset: (rnd() - 0.5) * 0.22 });
   }
   bodies.instanceColor.needsUpdate = true;
+  roofs.instanceColor.needsUpdate = true;
 
   const carGroup = new THREE.Group();
-  carGroup.add(bodies, cabins, wheels, heads, tails);
+  carGroup.add(shadows, bodies, roofs, cabins, wheels, rims, heads, tails);
   scene.add(carGroup);
 
   function update(time) {
-    const y = PLAZA_Y + 0.12;
+    const laneY = PLAZA_Y + 0.075;
+    const wheelY = laneY + 0.155;
+    const spinRate = ROAD.rx / 0.155;
     for (let i = 0; i < count; i++) {
       const car = cars[i];
       const a = time * car.speed + car.phase;
@@ -168,33 +196,37 @@ function createCarFleet(scene) {
       const dx = -Math.sin(a) * rx;
       const dz = Math.cos(a) * rz;
       const yaw = Math.atan2(-dz, dx);
-      dummy.position.set(x, y, z);
+      dummy.position.set(x, laneY, z);
       dummy.rotation.set(0, yaw, 0);
       dummy.scale.setScalar(0.98);
       dummy.updateMatrix();
       bodies.setMatrixAt(i, dummy.matrix);
+      roofs.setMatrixAt(i, dummy.matrix);
       cabins.setMatrixAt(i, dummy.matrix);
       heads.setMatrixAt(i, dummy.matrix);
       tails.setMatrixAt(i, dummy.matrix);
-      // 四个车轮
+      // 车底柔和投影（车灯阴影不参与动态阴影贴图，用贴图代替）
+      dummy.position.set(x, PLAZA_Y + 0.079, z);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      shadows.setMatrixAt(i, dummy.matrix);
+      // 四个车轮：加宽轮距使轮胎露出车身，轮毂随车速滚动
       const cos = Math.cos(yaw), sin = Math.sin(yaw);
-      const wheelPos = [[0.36, 0.22], [-0.36, 0.22], [0.36, -0.22], [-0.36, -0.22]];
+      const roll = -(time * car.speed * spinRate) % (Math.PI * 2);
+      const wheelPos = [[0.37, 0.265], [-0.37, 0.265], [0.37, -0.265], [-0.37, -0.265]];
       for (let w = 0; w < 4; w++) {
         const [lx, lz] = wheelPos[w];
-        const wx = x + lx * cos - lz * sin;
-        const wz = z + lx * sin + lz * cos;
-        dummy.position.set(wx, y + 0.145, wz);
-        dummy.rotation.set(0, yaw, 0);
-        dummy.scale.setScalar(0.98);
-        dummy.updateMatrix();
-        wheels.setMatrixAt(i * 4 + w, dummy.matrix);
+        const wx = x + lx * cos + lz * sin;
+        const wz = z - lx * sin + lz * cos;
+        wheelDummy.position.set(wx, wheelY, wz);
+        wheelDummy.rotation.set(0, yaw, roll);
+        wheelDummy.scale.setScalar(0.98);
+        wheelDummy.updateMatrix();
+        wheels.setMatrixAt(i * 4 + w, wheelDummy.matrix);
+        rims.setMatrixAt(i * 4 + w, wheelDummy.matrix);
       }
     }
-    bodies.instanceMatrix.needsUpdate = true;
-    cabins.instanceMatrix.needsUpdate = true;
-    wheels.instanceMatrix.needsUpdate = true;
-    heads.instanceMatrix.needsUpdate = true;
-    tails.instanceMatrix.needsUpdate = true;
+    for (const m of [bodies, roofs, cabins, wheels, rims, heads, tails, shadows]) m.instanceMatrix.needsUpdate = true;
   }
 
   return { group: carGroup, update };

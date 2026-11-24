@@ -567,7 +567,7 @@ body.is-reimburse .labels { display: none; }
   position: absolute;
   inset: -30% -10% auto;
   height: 80%;
-  background: radial-gradient(ellipse at 30% 0%, rgba(255, 255, 255, 0.24), transparent 65%);
+  background: radial-gradient(ellipse at 30% 0%, rgba(232, 207, 148, 0.2), transparent 65%);
   pointer-events: none;
   opacity: 0.65;
 }
@@ -589,13 +589,13 @@ body.is-reimburse .labels { display: none; }
 }
 .rb-card--pending .rb-avatar { background: rgba(201, 167, 90, 0.14); border-color: rgba(201, 167, 90, 0.28); color: #f3ebda; }
 .rb-card-person > div { min-width: 0; }
-.rb-card-person b { display: block; font-family: var(--rb-serif); font-size: 12px; font-weight: 500; letter-spacing: 0.06em; color: #eee5d5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rb-card-person span { display: block; margin-top: 2px; font-size: 8px; letter-spacing: 0.04em; color: var(--rb-muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rb-card-person b { display: block; font-family: var(--rb-serif); font-size: 12px; font-weight: 500; letter-spacing: 0.06em; color: #f6efe1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rb-card-person span { display: block; margin-top: 2px; font-size: 8px; letter-spacing: 0.04em; color: #94a2b4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rb-card--pending .rb-card-person b { color: #f3ebda; }
-.rb-card--pending .rb-card-person span { color: var(--rb-muted-2); }
+.rb-card--pending .rb-card-person span { color: #b3a48b; }
 
-.rb-card-amount { font-family: var(--rb-serif); font-size: 15px; font-weight: 500; letter-spacing: 0.01em; color: var(--rb-gold-2); white-space: nowrap; font-variant-numeric: tabular-nums; transform: translateY(-1px); }
-.rb-card--pending .rb-card-amount { color: var(--rb-gold-2); font-weight: 500; }
+.rb-card-amount { font-family: var(--rb-serif); font-size: 15px; font-weight: 500; letter-spacing: 0.01em; color: #f2d79e; white-space: nowrap; font-variant-numeric: tabular-nums; transform: translateY(-1px); }
+.rb-card--pending .rb-card-amount { color: #f6dfae; font-weight: 500; }
 
 .rb-drag-handle {
   width: 20px; height: 20px;
@@ -613,22 +613,22 @@ body.is-reimburse .labels { display: none; }
 }
 .rb-drag-handle svg { width: 14px; height: 14px; }
 .rb-drag-handle:hover { color: var(--rb-gold); background: rgba(216, 180, 119, 0.1); }
-.rb-card--pending .rb-drag-handle { color: rgba(23, 31, 7, 0.45); }
-.rb-card--pending .rb-drag-handle:hover { background: rgba(20, 26, 8, 0.1); color: #151b06; }
+.rb-card--pending .rb-drag-handle { color: rgba(226, 213, 189, 0.55); }
+.rb-card--pending .rb-drag-handle:hover { background: rgba(201, 167, 90, 0.14); color: var(--rb-gold-2); }
 
 .rb-card-content {
   margin: 0;
   font-size: 9.5px;
   line-height: 1.6;
   letter-spacing: 0.02em;
-  color: var(--rb-muted);
+  color: #aab7c7;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   min-height: 30px;
 }
-.rb-card--pending .rb-card-content { color: rgba(23, 30, 8, 0.76); }
+.rb-card--pending .rb-card-content { color: #ddd4c4; }
 
 .rb-card-badges { display: flex; flex-wrap: wrap; gap: 4px; }
 .rb-badge {
@@ -640,7 +640,7 @@ body.is-reimburse .labels { display: none; }
   border-radius: 3px;
   font-size: 7px;
   letter-spacing: 0.06em;
-  color: var(--rb-muted);
+  color: #a9b7c8;
   background: rgba(160, 190, 230, 0.04);
   white-space: nowrap;
 }
@@ -649,10 +649,10 @@ body.is-reimburse .labels { display: none; }
 .rb-badge--warn { color: #ddb476; border-color: rgba(221, 180, 118, 0.24); background: rgba(221, 180, 118, 0.05); }
 .rb-badge--high { color: #f2ce8e; border-color: rgba(242, 206, 142, 0.34); background: rgba(242, 206, 142, 0.08); }
 .rb-badge--file { color: #b2c6da; }
-.rb-card--pending .rb-badge { border-color: rgba(22, 29, 7, 0.24); background: rgba(22, 29, 7, 0.05); color: rgba(22, 29, 7, 0.74); }
-.rb-card--pending .rb-badge--high { color: #2a2507; border-color: rgba(45, 35, 7, 0.35); background: rgba(255, 255, 255, 0.16); }
-.rb-card--pending .rb-badge--ok { color: #1c3012; border-color: rgba(24, 46, 14, 0.25); }
-.rb-card--pending .rb-badge svg { opacity: 0.8; }
+.rb-card--pending .rb-badge { border-color: rgba(201, 167, 90, 0.24); background: rgba(201, 167, 90, 0.07); color: #cdc0a6; }
+.rb-card--pending .rb-badge--high { color: #f4d69c; border-color: rgba(244, 214, 156, 0.42); background: rgba(244, 214, 156, 0.1); }
+.rb-card--pending .rb-badge--ok { color: #b9dcc3; border-color: rgba(159, 207, 174, 0.28); }
+.rb-card--pending .rb-badge svg { opacity: 0.9; }
 
 .rb-high-note {
   padding: 5px 7px;
@@ -662,7 +662,7 @@ body.is-reimburse .labels { display: none; }
   letter-spacing: 0.04em;
   color: #c9b68e;
 }
-.rb-card--pending .rb-high-note { border-left-color: rgba(30, 35, 8, 0.45); background: rgba(30, 35, 8, 0.06); color: rgba(29, 34, 8, 0.78); }
+.rb-card--pending .rb-high-note { border-left-color: rgba(242, 206, 142, 0.62); background: rgba(242, 206, 142, 0.08); color: #dccaa6; }
 
 .rb-card-foot {
   display: flex;
@@ -672,10 +672,10 @@ body.is-reimburse .labels { display: none; }
   padding-top: 8px;
   border-top: 1px solid rgba(160, 190, 230, 0.08);
 }
-.rb-card--pending .rb-card-foot { border-top-color: rgba(22, 29, 7, 0.14); }
-.rb-card-time { display: inline-flex; align-items: center; gap: 5px; font-size: 7.5px; letter-spacing: 0.03em; color: var(--rb-muted-2); }
+.rb-card--pending .rb-card-foot { border-top-color: rgba(201, 167, 90, 0.18); }
+.rb-card-time { display: inline-flex; align-items: center; gap: 5px; font-size: 7.5px; letter-spacing: 0.03em; color: #8291a4; }
 .rb-card-time svg { width: 11px; height: 11px; opacity: 0.65; }
-.rb-card--pending .rb-card-time { color: rgba(23, 30, 7, 0.48); }
+.rb-card--pending .rb-card-time { color: #a99b83; }
 .rb-card-actions { display: flex; gap: 3px; }
 .rb-card-action {
   width: 24px; height: 22px;
@@ -691,10 +691,8 @@ body.is-reimburse .labels { display: none; }
 .rb-card-action svg { width: 12px; height: 12px; }
 .rb-card-action:hover { color: var(--rb-gold-2); border-color: rgba(216, 180, 119, 0.35); background: rgba(216, 180, 119, 0.07); }
 .rb-card-action.danger:hover { color: #ffb4a2; border-color: rgba(224, 138, 118, 0.4); background: rgba(224, 138, 118, 0.08); }
-.rb-card--pending .rb-card-action { border-color: rgba(20, 27, 6, 0.24); color: rgba(18, 24, 4, 0.86); background: rgba(255, 255, 255, 0.2); }
-.rb-card--pending .rb-card-action:hover { border-color: rgba(20, 27, 6, 0.45); background: rgba(255, 255, 255, 0.38); color: #101605; }
-.rb-card--pending .rb-drag-handle { color: rgba(17, 23, 3, 0.7); }
-.rb-card--pending .rb-drag-handle:hover { background: rgba(20, 26, 8, 0.14); color: #101605; }
+.rb-card--pending .rb-card-action { border-color: rgba(201, 167, 90, 0.24); color: #dccbaa; background: rgba(201, 167, 90, 0.07); }
+.rb-card--pending .rb-card-action:hover { border-color: rgba(201, 167, 90, 0.52); background: rgba(201, 167, 90, 0.16); color: var(--rb-gold-2); }
 
 .rb-card.drop-before::before,
 .rb-card.drop-after::after {
