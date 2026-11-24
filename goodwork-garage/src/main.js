@@ -23,7 +23,7 @@ import { InteractionSystem } from './systems/interaction.js?v=20261123v93';
 import { QuestSystem } from './systems/quest.js?v=20261123v93';
 import { AudioEngine } from './audio.js?v=20261123v93';
 import { UI } from './ui/ui.js?v=20261123v93';
-import { ReimburseBoard } from './ui/reimburse.js?v=20261124v928';
+import { ReimburseBoard } from './ui/reimburse.js?v=20261125v929';
 import { CloudSync } from './core/cloudSync.js?v=20261124v928';
 
 // 🛠️ 在任何 UI 初始化之前，先建立一个独立的 CloudSync 单例
@@ -110,6 +110,7 @@ class GoodworkApp {
           onToast: (title, desc, type) => this.ui.toast(title, desc, type),
         });
         this.reimburse.open();
+        this.openCloudAttachmentFromUrl();
       } catch (e2) {
         console.error('降级进入工作台失败', e2);
         ui.el.loadingStatus.textContent = '当前浏览器不支持 WebGL2，且工作台加载失败。';
@@ -314,6 +315,17 @@ class GoodworkApp {
     ui.setReady();
     this.startIntro();
     this.exposeDebug();
+    this.openCloudAttachmentFromUrl();
+  }
+
+  openCloudAttachmentFromUrl() {
+    const id = this.params.get('cloudAttachment');
+    if (!id || !this.reimburse) return;
+    this.reimburse.open();
+    this.reimburse.openCloudAttachments(id).catch((err) => {
+      console.error('云端附件打开失败', err);
+      this.ui.toast('云端附件打开失败', '请进入报销工作台的「云端附件」重试。', 'error');
+    });
   }
 
   bindUI() {

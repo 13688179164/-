@@ -1114,6 +1114,85 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
 .rb-preview-card > .rb-icon-btn { position: absolute; top: 10px; right: 10px; z-index: 2; }
 .rb-preview-content { display: flex; align-items: center; justify-content: center; min-height: 200px; }
 .rb-preview-content img { max-width: 100%; max-height: 76vh; border-radius: 4px; }
+.rb-preview-modal { z-index: 60; }
+.rb-preview-content iframe { width: 100%; height: min(76vh, 900px); border: 0; border-radius: 4px; background: #fff; }
+
+.rb-files-modal { z-index: 46; }
+.rb-files-sheet {
+  width: min(1040px, 94vw);
+  height: min(820px, 90vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(143, 187, 232, 0.26);
+  border-radius: 10px;
+  background:
+    radial-gradient(ellipse 80% 50% at 85% 0%, rgba(143, 187, 232, 0.07), transparent 60%),
+    linear-gradient(160deg, rgba(10, 16, 27, 0.99), rgba(5, 9, 16, 0.995));
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.72);
+  transform: translateY(14px) scale(0.99);
+  transition: transform 0.45s var(--rb-ease);
+  overflow: hidden;
+}
+.rb-modal.is-open .rb-files-sheet { transform: none; }
+.rb-files-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 28px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 190, 230, 0.18) transparent;
+}
+.rb-file-center-row {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 110px 84px 30px;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--rb-line);
+  border-radius: 7px;
+  background: rgba(160, 190, 230, 0.025);
+}
+.rb-file-center-row + .rb-file-center-row { margin-top: 8px; }
+.rb-file-center-row.is-target { border-color: rgba(216, 180, 119, 0.65); background: rgba(216, 180, 119, 0.07); }
+.rb-file-center-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(216, 180, 119, 0.2);
+  border-radius: 7px;
+  background: rgba(216, 180, 119, 0.06);
+  color: var(--rb-gold);
+}
+.rb-file-center-icon svg { width: 19px; height: 19px; }
+.rb-file-center-copy { min-width: 0; }
+.rb-file-center-copy b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 500; color: #e7edf5; }
+.rb-file-center-copy span { display: block; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 8px; color: var(--rb-muted-2); }
+.rb-file-center-meta { text-align: right; }
+.rb-file-center-meta b { display: block; font-size: 9px; font-weight: 400; color: #bac7d6; }
+.rb-file-center-meta span { display: block; margin-top: 5px; font-size: 7px; }
+.rb-file-center-meta .is-cloud { color: var(--rb-green); }
+.rb-file-center-meta .is-local { color: var(--rb-gold); }
+.rb-file-center-open {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(143, 187, 232, 0.28);
+  border-radius: 5px;
+  background: rgba(143, 187, 232, 0.06);
+  color: var(--rb-blue);
+  font: 9px var(--rb-sans);
+  cursor: pointer;
+}
+.rb-file-center-open:hover { border-color: rgba(143, 187, 232, 0.58); background: rgba(143, 187, 232, 0.13); color: #e3f0ff; }
+.rb-file-center-open svg { width: 13px; height: 13px; }
+.rb-file-center-row > .rb-attach-download { width: 30px; height: 30px; }
+.rb-file-center-row > .rb-attach-download svg { width: 15px; height: 15px; }
+.rb-file-center-empty { padding: 80px 20px; text-align: center; font-family: var(--rb-serif); font-size: 18px; line-height: 2; color: #d9e1eb; }
+.rb-file-center-empty small { font-family: var(--rb-sans); font-size: 9px; color: var(--rb-muted-2); }
+.rb-files-foot { flex: 0 0 auto; padding: 13px 28px 17px; border-top: 1px solid var(--rb-line); font-size: 8px; line-height: 1.7; color: var(--rb-muted-2); }
 
 /* ---------------- responsive ---------------- */
 
@@ -1922,7 +2001,7 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
   .rb-processed-main { min-width: 0; }
 
   /* 弹层/抽屉：全屏，内容可纵向滚动 */
-  .rb-drawer, .rb-report-sheet, .rb-invoice-sheet, .rb-statement-sheet, .rb-cloud-sheet {
+  .rb-drawer, .rb-report-sheet, .rb-invoice-sheet, .rb-statement-sheet, .rb-cloud-sheet, .rb-files-sheet {
     width: 100vw;
     max-width: 100vw;
     height: 100vh;
@@ -1930,7 +2009,22 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
     border-radius: 0;
     border: 0;
   }
-  .rb-drawer-body, .rb-report-body, .rb-invoice-body, .rb-cloud-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .rb-drawer-body, .rb-report-body, .rb-invoice-body, .rb-cloud-body, .rb-files-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .rb-files-sheet .rb-report-head { padding: 16px; }
+  .rb-files-body { padding: 12px 14px 18px; }
+  .rb-file-center-row { grid-template-columns: 34px minmax(0, 1fr) 30px; gap: 9px; padding: 11px; }
+  .rb-file-center-icon { width: 32px; height: 32px; grid-row: 1 / 3; }
+  .rb-file-center-copy { grid-column: 2; }
+  .rb-file-center-copy b { font-size: 10px; }
+  .rb-file-center-copy span { white-space: normal; line-height: 1.6; }
+  .rb-file-center-meta { grid-column: 2; display: flex; align-items: center; gap: 10px; text-align: left; }
+  .rb-file-center-meta b, .rb-file-center-meta span { margin: 0; }
+  .rb-file-center-open { grid-column: 2; width: 82px; }
+  .rb-file-center-row > .rb-attach-download { grid-column: 3; grid-row: 1 / 4; }
+  .rb-files-foot { padding: 11px 14px 15px; }
+  .rb-preview-card { width: 100vw; height: 100dvh; max-height: none; padding: 12px; border: 0; border-radius: 0; }
+  .rb-preview-content { height: 100%; }
+  .rb-preview-content iframe { height: 100%; }
   /* 财务报表宽表允许自身内部横向滚动，不被裁剪 */
   .rb-statement-body { overflow: auto; }
   .rb-fin-paper { min-width: 980px; }
