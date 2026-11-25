@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GOODWORK 报销工作台 · 运行逻辑思维导图</title>
+<style>
+  :root{
+    --ink:#171717;
+    --muted:#5b5b66;
+    --line:#e3e3e9;
+    --bg:#f5f5f8;
+    --card:#ffffff;
+    --brand:#4b3fe3;
+    --brand-soft:#f2f7ff;
+    --brand-line:#c9c4f7;
+    --chip:#f7f7fa;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .page{
+    max-width:1320px;
+    margin:0 auto;
+    padding:44px 24px 64px;
+  }
+  header{ margin-bottom:24px; }
+  .kicker{
+    font-size:12px;
+    letter-spacing:.14em;
+    color:var(--brand);
+    font-weight:600;
+    text-transform:uppercase;
+  }
+  h1{
+    margin:8px 0 10px;
+    font-size:26px;
+    line-height:1.35;
+    font-weight:600;
+  }
+  .lede{
+    margin:0;
+    max-width:860px;
+    font-size:14px;
+    color:var(--muted);
+    line-height:1.8;
+  }
+  .meta{
+    margin-top:14px;
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+  .meta span{
+    font-size:12px;
+    color:var(--muted);
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:999px;
+    padding:4px 12px;
+  }
+  .board{
+    margin-top:22px;
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:16px;
+    padding:20px;
+    overflow:hidden;
+  }
+  svg{ display:block; width:100%; height:auto; }
+  .mindmap-title{
+    font-size:14px;
+    font-weight:600;
+    fill:var(--ink);
+  }
+  .branch-label{
+    font-size:14px;
+    font-weight:500;
+    fill:var(--ink);
+  }
+  .leaf-label{
+    font-size:12px;
+    fill:var(--muted);
+  }
+  .center-label{
+    font-size:16px;
+    font-weight:600;
+    fill:#1a1759;
+  }
+  .center-sub{
+    font-size:12px;
+    fill:#4b3fe3;
+  }
+  .link{
+    fill:none;
+    stroke:#b9b9c6;
+    stroke-width:1.4;
+    stroke-linecap:round;
+    stroke-linejoin:round;
+  }
+  .boundary{
+    fill:none;
+    stroke:var(--line);
+    stroke-width:1.2;
+    stroke-dasharray:6 6;
+  }
+  .node{ fill:var(--chip); stroke:var(--line); }
+  .leaf{ fill:#ffffff; stroke:var(--line); }
+  .center{ fill:var(--brand-soft); stroke:var(--brand-line); }
+  .legend{
+    display:flex;
+    flex-wrap:wrap;
+    gap:18px;
+    margin-top:16px;
+    padding-top:14px;
+    border-top:1px solid var(--line);
+    font-size:12px;
+    color:var(--muted);
+  }
+  .legend i{
+    display:inline-block;
+    width:12px;
+    height:12px;
+    border-radius:3px;
+    margin-right:6px;
+    vertical-align:-2px;
+  }
+  .legend .sw-center{ background:var(--brand-soft); border:1px solid var(--brand-line); }
+  .legend .sw-node{ background:var(--chip); border:1px solid var(--line); }
+  .legend .sw-leaf{ background:#fff; border:1px solid var(--line); }
+  .foot{
+    margin-top:22px;
+    font-size:12px;
+    color:var(--muted);
+    line-height:1.9;
+  }
+  .foot b{ color:var(--ink); font-weight:600; }
+  @media (max-width:720px){
+    .page{ padding:28px 14px 44px; }
+    h1{ font-size:21px; }
+    .board{ padding:12px; border-radius:12px; }
+  }
+  @media print{
+    body{ background:#fff; }
+    .page{ max-width:none; padding:0; }
+    .board{ border:none; padding:0; }
+    .meta span{ border-color:#ddd; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="kicker">Goodwork Finance OS</div>
+      <h1>报销工作台 · 运行逻辑思维导图</h1>
+      <p class="lede">
+        这张图把工作台拆成七个部分：浏览器里的页面、云开发数据库、数据同步、附件链路、Excel 导出、网站发布，以及需要留意的风险边界。
+        中心是工作台本身，左右两侧分别对应“出口”（导出与发布）和“入口与支撑”（页面、数据、同步、附件）。
+      </p>
+      <div class="meta">
+        <span>静态网页 + 云数据库</span>
+        <span>使用者 10 人以内</span>
+        <span>手机填报 / 电脑审核</span>
+        <span>更新于 2026-11-25</span>
+      </div>
+    </header>
+
+    <section class="board" aria-label="工作台运行逻辑思维导图">
+      <svg viewBox="0 0 1240 960" role="img" aria-labelledby="mapTitle mapDesc">
+        <title id="mapTitle">GOODWORK 报销工作台运行逻辑</title>
+        <desc id="mapDesc">中心为报销工作台，左侧为导出、发布、风险，右侧为前端页面、云开发数据库、同步机制、附件链路。</desc>
+
+        <!-- 连线：中心 → 左侧分支 -->
+        <path class="link" d="M540 480 C512 480 508 150 480 150" />
+        <path class="link" d="M540 500 H480" />
+        <path class="link" d="M540 520 C512 520 508 710 480 710" />
+
+        <!-- 连线：左侧分支 → 子项 -->
+        <path class="link" d="M320 150 C305 150 305 90 290 90" />
+        <path class="link" d="M320 150 H290" />
+        <path class="link" d="M320 150 C305 150 305 210 290 210" />
+
+        <path class="link" d="M320 430 C305 430 305 370 290 370" />
+        <path class="link" d="M320 430 H290" />
+        <path class="link" d="M320 430 C305 430 305 490 290 490" />
+
+        <path class="link" d="M320 710 C305 710 305 650 290 650" />
+        <path class="link" d="M320 710 H290" />
+        <path class="link" d="M320 710 C305 710 305 770 290 770" />
+
+        <!-- 连线：中心 → 右侧分支 -->
+        <path class="link" d="M700 480 C728 480 732 150 760 150" />
+        <path class="link" d="M700 488 C728 488 732 380 760 380" />
+        <path class="link" d="M700 512 C728 512 732 610 760 610" />
+        <path class="link" d="M700 520 C728 520 732 840 760 840" />
+
+        <!-- 连线：右侧分支 → 子项 -->
+        <path class="link" d="M920 150 C935 150 935 90 950 90" />
+        <path class="link" d="M920 150 H950" />
+        <path class="link" d="M920 150 C935 150 935 210 950 210" />
+
+        <path class="link" d="M920 380 C935 380 935 320 950 320" />
+        <path class="link" d="M920 380 H950" />
+        <path class="link" d="M920 380 C935 380 935 440 950 440" />
+
+        <path class="link" d="M920 610 C935 610 935 550 950 550" />
+        <path class="link" d="M920 610 H950" />
+        <path class="link" d="M920 610 C935 610 935 670 950 670" />
+
+        <path class="link" d="M920 840 C935 840 935 780 950 780" />
+        <path class="link" d="M920 840 H950" />
+        <path class="link" d="M920 840 C935 840 935 900 950 900" />
+
+        <!-- 中心 -->
+        <rect class="center" x="540" y="452" width="160" height="96" rx="12" />
+        <text class="center-label" x="620" y="494" text-anchor="middle">GOODWORK</text>
+        <text class="center-label" x="620" y="518" text-anchor="middle">报销工作台</text>
+        <text class="center-sub" x="620" y="538" text-anchor="middle">浏览器 + 云数据库</text>
+
+        <!-- 左侧分支 -->
+        <g>
+          <rect class="node" x="320" y="126" width="160" height="48" rx="8" />
+          <text class="branch-label" x="400" y="155" text-anchor="middle">导出 Excel</text>
+        </g>
+        <g>
+          <rect class="node" x="320" y="406" width="160" height="48" rx="8" />
+          <text class="branch-label" x="400" y="435" text-anchor="middle">发布与访问</text>
+        </g>
+        <g>
+          <rect class="node" x="320" y="686" width="160" height="48" rx="8" />
+          <text class="branch-label" x="400" y="715" text-anchor="middle">边界与风险</text>
+        </g>
+
+        <!-- 左侧子项 -->
+        <rect class="leaf" x="60" y="70" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="95">附件本机优先，再取云端</text>
+        <rect class="leaf" x="60" y="130" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="155">图片按原图嵌入单元格</text>
+        <rect class="leaf" x="60" y="190" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="215">文档放类型示意图</text>
+
+        <rect class="leaf" x="60" y="350" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="375">静态文件，无自建服务器</text>
+        <rect class="leaf" x="60" y="410" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="435">固定公开网址，所有人可见</text>
+        <rect class="leaf" x="60" y="470" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="495">部署只换代码，不动数据</text>
+
+        <rect class="leaf" x="60" y="630" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="655">匿名密钥，没有登录</text>
+        <rect class="leaf" x="60" y="690" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="715">无服务端校验与审计</text>
+        <rect class="leaf" x="60" y="750" width="230" height="40" rx="8" />
+        <text class="leaf-label" x="74" y="775">并发修改后写覆盖</text>
+
+        <!-- 右侧分支 -->
+        <g>
+          <rect class="node" x="760" y="126" width="160" height="48" rx="8" />
+          <text class="branch-label" x="840" y="155" text-anchor="middle">前端页面</text>
+        </g>
+        <g>
+          <rect class="node" x="760" y="356" width="160" height="48" rx="8" />
+          <text class="branch-label" x="840" y="385" text-anchor="middle">云开发数据库</text>
+        </g>
+        <g>
+          <rect class="node" x="760" y="586" width="160" height="48" rx="8" />
+          <text class="branch-label" x="840" y="615" text-anchor="middle">同步机制</text>
+        </g>
+        <g>
+          <rect class="node" x="760" y="816" width="160" height="48" rx="8" />
+          <text class="branch-label" x="840" y="845" text-anchor="middle">附件链路</text>
+        </g>
+
+        <!-- 右侧子项 -->
+        <rect class="leaf" x="950" y="70" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="95">三维车库与报销工作台</text>
+        <rect class="leaf" x="950" y="130" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="155">三列看板与筛选统计</text>
+        <rect class="leaf" x="950" y="190" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="215">本机缓存与 Excel 导出</text>
+
+        <rect class="leaf" x="950" y="300" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="325">4 张表：任务 / 附件 / 状态 / 内容</text>
+        <rect class="leaf" x="950" y="360" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="385">公开 REST 数据接口</text>
+        <rect class="leaf" x="950" y="420" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="445">附件以 Base64 文本存储</text>
+
+        <rect class="leaf" x="950" y="530" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="555">每 3 秒向云端拉取一次</text>
+        <rect class="leaf" x="950" y="590" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="615">改动后约 1.5 秒推送</text>
+        <rect class="leaf" x="950" y="650" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="675">按时间戳，新者胜出</text>
+
+        <rect class="leaf" x="950" y="760" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="785">原设备先把文件传上云</text>
+        <rect class="leaf" x="950" y="820" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="845">其他设备按需下载缓存</text>
+        <rect class="leaf" x="950" y="880" width="250" height="40" rx="8" />
+        <text class="leaf-label" x="964" y="905">从未上传则别人看不到</text>
+      </svg>
+
+      <div class="legend">
+        <span><i class="sw-center"></i>核心系统</span>
+        <span><i class="sw-node"></i>组成部分</span>
+        <span><i class="sw-leaf"></i>具体机制</span>
+      </div>
+    </section>
+
+    <div class="foot">
+      <b>读图顺序建议：</b>先看右侧“前端页面 → 云开发数据库 → 同步机制”，理解数据怎么产生和共享；
+      再看最下方“附件链路”，理解为什么换设备会看不到附件；最后看左侧“导出、发布、风险”，理解产出与边界。
+      <br />
+      本图与《GOODWORK 报销工作台 · 运行逻辑说明》配套使用，图中每一项在文档里都有展开说明。
+    </div>
+  </div>
+</body>
+</html>
