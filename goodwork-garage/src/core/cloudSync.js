@@ -52,6 +52,15 @@ function base64ToBlob(base64, type = '') {
   return new Blob([bytes], { type: type || 'application/octet-stream' });
 }
 
+function fileExtensionFor(meta, blob) {
+  const name = String(meta?.name || '');
+  const m = name.match(/\.([A-Za-z0-9]{1,6})$/);
+  if (m) return m[1].toLowerCase();
+  const type = String(blob?.type || meta?.type || '');
+  const sub = (type.split('/')[1] || 'bin').replace(/[^a-z0-9]/gi, '');
+  return sub.slice(0, 6) || 'bin';
+}
+
 // ========== PostgREST 辅助函数 ==========
 
 function pgBaseUrl(envId) {
@@ -317,6 +326,17 @@ export class CloudSync {
     this.lastPollAt = null;
     this.lastRemoteUpdatedAt = '';
     this.errorDetail = '';
+    // 轮询优化：指纹拉取 + 自适应间隔 + 页面隐藏暂停
+    this._pollCount = 0;
+    this._fingerprint = null;
+    this._pollDelay = POLL_INTERVAL_MS;
+    this._lastChangeAt = Date.now();
+    this._visibilityHandler = null;
+    // 附件云存储迁移状态
+    this._migrating = false;
+    this._migrationDisabledUntil = 0;
+    this._storageDisabledUntil = 0;
+    this.migrationTimer = null;
     // 🔧 删除墓碑：id → 删除时间戳(ms)。只有"更新时间早于删除时间"的任务才会被清除，
     //    避免误删，也允许删除后重新创建/编辑同一条记录。
     this.deletedIds = new Map();
@@ -909,9 +929,17 @@ export class CloudSync {
       const finalTasks = mergeByUpdatedAt(state.tasks || [], remoteTasks)
         .filter((t) => !this.isTombstoned(t));
 
-      // --- 1. upsert 所有 tasks（每条用它自己的 updatedAt，保持不变）---
-      const taskRows = finalTasks.map((t) => this.taskToRow(t, t.updatedAt || now));
-      console.log('[cloudSync] pushNow ▶️ taskRows=' + taskRows.length);
+      // 只上传真正变化的行：与云端 updatedAt 一致的任务视为未变化，跳过写入
+      const remoteById = new Map(remoteTasks.map((t) => [t.id, t]));
+      const tasksToPush = finalTasks.filter((t) => {
+        const remote = remoteById.get(t.id);
+        if (!remote) return true;
+        return String(t.updatedAt || '') !== String(remote.updatedAt || '');
+      });
+
+      // --- 1. upsert 变化的 tasks（每条用它自己的 updatedAt，保持不变）---
+      const taskRows = tasksToPush.map((t) => this.taskToRow(t, t.updatedAt || now));
+      console.log(`[cloudSync] pushNow ▶️ taskRows=${taskRows.length}/${finalTasks.length}`);
       if (taskRows.length > 0) {
         try {
           const pgRes = await withTimeout(
@@ -928,9 +956,9 @@ export class CloudSync {
         }
       }
 
-      // --- 2. upsert 所有 attachments ---
+      // --- 2. upsert 变化任务的 attachments ---
       const attachRows = [];
-      for (const t of finalTasks) {
+      for (const t of tasksToPush) {
         for (const a of t.attachments || []) {
           attachRows.push(sanitizeRow({
             id: a.id ?? '',
@@ -1042,7 +1070,12 @@ export class CloudSync {
   startPoll() {
     this.stopPoll();
     if (!this.connected) return;
-    this.pollTimer = setInterval(() => this.pollTick(), POLL_INTERVAL_MS);
+    this._pollCount = 0;
+    this._fingerprint = null;
+    this._pollDelay = POLL_INTERVAL_MS;
+    this._lastChangeAt = Date.now();
+    this._bindVisibilityPoll();
+    this.scheduleNextPoll(true);
     // 🔧 终极保险：每 15 秒自动把 localStorage 数据推上云（不管 markLocalChange 有没有被调用）
     this.autoPushTimer = setInterval(() => {
       if (this.connected && !this.syncing) {
@@ -1053,17 +1086,112 @@ export class CloudSync {
         }
       }
     }, 15000);
+    // 🔧 旧附件迁移：把数据库里的 Base64 内容搬到云存储，分批进行
+    this.migrationTimer = setInterval(() => {
+      this.migrateDbAttachments({ limit: 2 }).catch(() => {});
+    }, 30000);
+  }
+
+  _bindVisibilityPoll() {
+    if (typeof document === 'undefined' || this._visibilityHandler) return;
+    this._visibilityHandler = () => {
+      if (document.hidden) {
+        clearTimeout(this.pollTimer);
+        this.pollTimer = null;
+        return;
+      }
+      this.pollTick().finally(() => this.scheduleNextPoll(true));
+    };
+    document.addEventListener('visibilitychange', this._visibilityHandler);
+  }
+
+  scheduleNextPoll(immediate = false) {
+    clearTimeout(this.pollTimer);
+    this.pollTimer = null;
+    if (!this.connected) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    this.pollTimer = setTimeout(() => {
+      this.pollTick().finally(() => this.scheduleNextPoll());
+    }, immediate ? 0 : this._pollDelay);
   }
 
   stopPoll() {
+    clearTimeout(this.pollTimer);
     clearInterval(this.pollTimer);
     clearInterval(this.autoPushTimer);
+    clearInterval(this.migrationTimer);
     this.pollTimer = null;
     this.autoPushTimer = null;
+    this.migrationTimer = null;
+    if (this._visibilityHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._visibilityHandler);
+      this._visibilityHandler = null;
+    }
+  }
+
+  // 只取 id + 更新时间作为“指纹”，体积约为整表的 1/10
+  async computeRemoteFingerprint() {
+    const [taskRows, procRows] = await Promise.all([
+      pgRequest('GET', this.envId, 'goodwork_tasks', {
+        select: 'id,updated_at', order: ['updated_at.desc'], limit: 2000,
+      }),
+      pgRequest('GET', this.envId, 'goodwork_processed', {
+        select: 'task_id,event_date,created_at', order: ['created_at.desc'], limit: 2000,
+      }),
+    ]);
+    const parts = [];
+    for (const r of taskRows) parts.push(`t:${r.id}:${r.updated_at || ''}`);
+    for (const r of procRows) parts.push(`p:${r.task_id}:${r.event_date}:${r.created_at || ''}`);
+    parts.sort();
+    const s = parts.join('|');
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return `${parts.length}:${h}`;
+  }
+
+  tombstoneSignature() {
+    return [...this.deletedIds.entries()].map(([id, at]) => `${id}:${at}`).sort().join('|');
+  }
+
+  notePoll(changed) {
+    const now = Date.now();
+    if (changed) {
+      this._lastChangeAt = now;
+      this._pollDelay = POLL_INTERVAL_MS;
+    } else if (now - this._lastChangeAt > 60000) {
+      this._pollDelay = 15000;
+    }
   }
 
   async pollTick() {
     if (!this.connected || this.applying || this.syncing) return;
+    this._pollCount = (this._pollCount || 0) + 1;
+    try {
+      let forceFull = this._pollCount === 1;
+      // 删除墓碑每 10 次轮询检查一次；有变化再触发全量
+      if (this._pollCount % 10 === 0) {
+        const before = this.tombstoneSignature();
+        await this.loadTombstonesFromCloud();
+        if (this.tombstoneSignature() !== before) forceFull = true;
+      }
+      let fingerprint = null;
+      try { fingerprint = await this.computeRemoteFingerprint(); } catch { fingerprint = null; }
+      const changed = !fingerprint || fingerprint !== this._fingerprint;
+      if (!changed && !forceFull) {
+        this.lastPollAt = Date.now();
+        this.notePoll(false);
+        return;
+      }
+      const ok = await this.pullFullState();
+      if (ok !== false && fingerprint) this._fingerprint = fingerprint;
+      this.notePoll(changed);
+    } catch (err) {
+      console.warn('[cloudSync] pollTick 失败（静默）:', err?.message?.slice(0, 100));
+    }
+  }
+
+  async pullFullState() {
+    if (!this.connected || this.applying || this.syncing) return false;
     try {
       // 🔧 全量拉取（数据量小），不再依赖 updated_at 时间过滤：
       //    多台设备的系统时钟可能有偏差，用 gt.since 会漏掉"时钟慢"的那台设备写入的数据。
@@ -1179,7 +1307,9 @@ export class CloudSync {
     } catch (err) {
       // 🔧 轮询是后台静默行为，失败只 log 不 emit —— 不让 UI 显示「同步异常」
       console.warn('[cloudSync] pollTick 失败（静默）:', err?.message?.slice(0, 100));
+      return false;
     }
+    return true;
   }
 
   // ========== 附件云存储（业务数据仍走纯 fetch PostgreSQL）==========
@@ -1215,6 +1345,93 @@ export class CloudSync {
     if (!blob) throw new Error('本地附件缓存不存在，无法上传。');
     const id = String(meta?.id || '');
     if (!id) throw new Error('附件缺少有效 ID，无法上传。');
+    if (this._storageDisabledUntil && Date.now() < this._storageDisabledUntil) {
+      return this.uploadAttachmentToDb(meta, blob);
+    }
+    try {
+      const fileID = await this.uploadAttachmentToStorage(meta, blob);
+      if (fileID) {
+        console.log('[cloudSync] 附件已上传云存储:', meta.name, fileID);
+        return fileID;
+      }
+    } catch (err) {
+      this._storageDisabledUntil = Date.now() + 10 * 60 * 1000;
+      console.warn('[cloudSync] 云存储不可用，10 分钟内回退数据库存储:', meta.name, err?.message || err);
+    }
+    return this.uploadAttachmentToDb(meta, blob);
+  }
+
+  // 优先：文件放云存储，数据库只记录短 fileID
+  async uploadAttachmentToStorage(meta, blob, { compress = true } = {}) {
+    const app = await this.ensureStorageApp();
+    const file = compress ? await this.compressImageForUpload(blob, meta) : blob;
+    const ext = fileExtensionFor(file, blob);
+    const safeId = String(meta.id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'file';
+    const path = `attachments/${safeId}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    if (typeof app.uploadFile === 'function') {
+      const res = await withTimeout(
+        app.uploadFile({ cloudPath: path, filePath: file }),
+        60000,
+        `附件「${meta.name || meta.id}」上传云存储超时。`
+      );
+      const fileID = res?.fileID || res?.fileId || res?.data?.fileID || res?.data?.fileId || '';
+      if (fileID) return fileID;
+      throw new Error('云存储未返回文件 ID。');
+    }
+    if (app.storage?.from) {
+      const res = await withTimeout(
+        app.storage.from(STORAGE_BUCKET).upload(path, file),
+        60000,
+        `附件「${meta.name || meta.id}」上传云存储超时。`
+      );
+      if (res?.error) throw res.error;
+      return `pg:${path}`;
+    }
+    throw new Error('当前云开发 SDK 不支持文件上传。');
+  }
+
+  // 上传前压缩图片，显著降低云存储与流量占用；失败则用原图
+  async compressImageForUpload(blob, meta) {
+    const type = String(blob?.type || meta?.type || '');
+    if (typeof document === 'undefined') return blob;
+    if (!/^image\//i.test(type) || /gif|svg|heic|heif/i.test(type)) return blob;
+    if (!blob?.size || blob.size < 400 * 1024) return blob;
+    let url = '';
+    try {
+      url = URL.createObjectURL(blob);
+      const img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('图片无法解码'));
+        el.src = url;
+      });
+      const nw = img.naturalWidth || img.width || 1;
+      const nh = img.naturalHeight || img.height || 1;
+      const scale = Math.min(1, 1600 / Math.max(nw, nh));
+      const w = Math.max(1, Math.round(nw * scale));
+      const h = Math.max(1, Math.round(nh * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return blob;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      const out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+      if (!out || out.size >= blob.size) return blob;
+      const name = String(meta?.name || '附件').replace(/\.[^.]+$/, '') + '.jpg';
+      return new File([out], name, { type: 'image/jpeg' });
+    } catch {
+      return blob;
+    } finally {
+      if (url) URL.revokeObjectURL(url);
+    }
+  }
+
+  // 兼容旧方案：Base64 存入数据库
+  async uploadAttachmentToDb(meta, blob) {
+    const id = String(meta?.id || '');
     const data = await blobToBase64(blob);
     const value = JSON.stringify({
       v: 1,
@@ -1232,6 +1449,100 @@ export class CloudSync {
       `附件「${meta.name || id}」上传超时。`
     );
     return `db:${id}`;
+  }
+
+  // 把历史 db: 附件分批迁移到云存储，迁移成功并校验通过后才清理数据库内容
+  async migrateDbAttachments({ limit = 2 } = {}) {
+    if (!this.connected || this._migrating) return { migrated: 0, failed: 0, skipped: true };
+    if (this._migrationDisabledUntil && Date.now() < this._migrationDisabledUntil) {
+      return { migrated: 0, failed: 0, skipped: true };
+    }
+    if (typeof document !== 'undefined' && document.hidden) {
+      return { migrated: 0, failed: 0, skipped: true };
+    }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return { migrated: 0, failed: 0, skipped: true };
+    }
+    this._migrating = true;
+    let migrated = 0;
+    let failed = 0;
+    const pending = [];
+    try {
+      const state = this.getState();
+      const tasks = state.tasks || [];
+      outer:
+      for (const task of tasks) {
+        for (const meta of task.attachments || []) {
+          if (migrated + failed >= limit) break outer;
+          const fileID = String(meta.cloudFileId || '');
+          if (!fileID.startsWith('db:')) continue;
+          try {
+            const blob = await this.downloadAttachment(fileID);
+            const nextId = await this.uploadAttachmentToStorage(meta, blob, { compress: false });
+            if (!nextId) throw new Error('云存储未返回文件 ID');
+            // 校验新地址可下载后再切换，避免数据丢失
+            await withTimeout(this.downloadAttachment(nextId), 30000, '迁移后校验下载超时');
+            pending.push({ taskId: task.id, attId: meta.id, nextId });
+            migrated++;
+          } catch (err) {
+            failed++;
+            console.warn('[cloudSync] 旧附件迁移失败:', meta.name, err?.message || err);
+          }
+        }
+      }
+      if (pending.length) {
+        // 重新读取最新状态后再写回，避免覆盖迁移期间的本地改动
+        const fresh = this.getState();
+        for (const { taskId, attId, nextId } of pending) {
+          const task = (fresh.tasks || []).find((t) => t.id === taskId);
+          const att = task?.attachments?.find((a) => a.id === attId);
+          if (!att) continue;
+          att.cloudFileId = nextId;
+          task.updatedAt = nowIso();
+        }
+        this.applyState(fresh, { source: 'cloud', silent: true });
+        // 确认新 fileID 真的落到本机存储，避免 applyState 未生效时误删旧内容
+        const verify = this.getState();
+        const applied = pending.filter(({ taskId, attId, nextId }) => {
+          const task = (verify.tasks || []).find((t) => t.id === taskId);
+          const att = task?.attachments?.find((a) => a.id === attId);
+          return att && String(att.cloudFileId || '') === nextId;
+        });
+        if (applied.length !== pending.length) {
+          console.warn(`[cloudSync] 旧附件迁移状态未完全写入本机：${applied.length}/${pending.length}`);
+        }
+        migrated = applied.length;
+        failed += pending.length - applied.length;
+        if (applied.length) {
+          this.markLocalChange();
+          this.onAttachmentsUploaded();
+        }
+        const pushed = applied.length
+          ? await this.pushNow({ force: true, silent: true, _internal: true })
+          : false;
+        // 只有附件登记已更新到云端，才清理数据库里的旧内容
+        if (pushed === true) {
+          for (const { attId } of applied) await this.deleteDbAttachment(attId);
+          console.log(`[cloudSync] 旧附件已迁移到云存储 ${applied.length} 个`);
+        }
+      }
+      if (failed > 0 && migrated === 0) {
+        this._migrationDisabledUntil = Date.now() + 10 * 60 * 1000;
+      }
+      return { migrated, failed };
+    } finally {
+      this._migrating = false;
+    }
+  }
+
+  async deleteDbAttachment(id) {
+    try {
+      await pgRequest('DELETE', this.envId, 'goodwork_meta', {
+        filter: { key: `eq.${DB_ATTACHMENT_PREFIX}${id}` },
+      });
+    } catch (err) {
+      console.warn('[cloudSync] 旧附件内容清理失败（不阻塞）:', err?.message || err);
+    }
   }
 
   async downloadAttachment(fileID) {

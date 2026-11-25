@@ -7,7 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261124v923';
-import { CloudSync } from '../core/cloudSync.js?v=20261124v928';
+import { CloudSync } from '../core/cloudSync.js?v=20261125v933';
 
 // 历史遗留的内置示例任务（GW-RB-SAMPLE-*），一律过滤不再展示/同步
 function isSampleTask(t) {
@@ -870,7 +870,7 @@ export class ReimburseBoard {
                 <li>环境 ID 已预填为 <code>attractive-starfish-d0bp2e865971</code>；如使用其他环境，直接替换上方 ID。</li>
                 <li>在「登录授权」中开启「匿名登录」（本版本免账号密码）。</li>
                 <li>创建数据库集合 <code>goodwork_workspaces</code>，权限选「<strong>所有用户可读，仅创建者可写</strong>」或自定义安全规则允许匿名用户读写 <code>_id === 'team'</code> 的文档。</li>
-                <li>开启云存储；附件会保存到 <code>goodwork/team/</code>。</li>
+                <li>开启云存储；新附件会保存到云存储的 <code>attachments/</code> 目录，数据库只记录文件标识；上传失败时自动回退到数据库。</li>
                 <li>在「安全域名」中加入当前站点：<code id="rbCloudDomain"></code>。</li>
               </ol>
               <p class="rb-cloud-hint">所有设备通过匿名登录共享同一个 <code>goodwork_workspaces.team</code> 文档，自动实时同步。本机数据始终保留，离线时仍可继续使用。</p>
@@ -2868,7 +2868,7 @@ export class ReimburseBoard {
         t.id, t.status, t.amount, t.applicant, t.department, t.category, t.appliedAt,
         t.order, t.updatedAt, t.hasInvoice, t.invoiceReceived, t.invoiceReceivedAt,
         t.reimbursedAt, t.reimbursedFrom, t.content,
-        (t.attachments || []).map((a) => a.id + ':' + (a.written ? 1 : 0)).join('|'),
+        (t.attachments || []).map((a) => a.id + ':' + (a.written ? 1 : 0) + ':' + String(a.cloudFileId || '').slice(0, 16)).join('|'),
       ].join('~')).join('\n');
       const nextProc = (Array.isArray(state.processedEvents) ? state.processedEvents : [])
         .filter((e) => !sampleIds.has(e.taskId));
