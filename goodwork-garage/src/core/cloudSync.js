@@ -11,27 +11,21 @@ const PUBLISHABLE_KEY = 'eyJhbGciOiJSUzI1NiIsImtpZCI6IjIxMTE1ZTA4LWJjYjQtNGViZS1
 const POLL_INTERVAL_MS = 3000;
 const PUSH_DEBOUNCE_MS = 1500;
 const DB_ATTACHMENT_PREFIX = 'attachment:';
-const STORAGE_BUCKET = 'goodwork';
+// 云开发控制台里的逻辑存储桶名称（物理桶名不作为 SDK 参数）
+const STORAGE_BUCKET = 'tasks';
 let cloudBaseSdkPromise = null;
 
+// 附件存储使用 v3 SDK：匿名登录能拿到有效 token，且支持新版 pgstore 存储
 function loadCloudBaseSDK() {
-  if (typeof window !== 'undefined' && window.cloudbase?.init) {
-    return Promise.resolve(window.cloudbase);
-  }
   if (!cloudBaseSdkPromise) {
-    cloudBaseSdkPromise = new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = new URL('../../vendor/cloudbase.full.js', import.meta.url).href;
-      script.onload = () => {
-        if (window.cloudbase?.init) resolve(window.cloudbase);
-        else reject(new Error('CloudBase SDK 加载后不可用。'));
-      };
-      script.onerror = () => reject(new Error('CloudBase SDK 加载失败，请检查网络后重试。'));
-      document.head.appendChild(script);
-    }).catch((err) => {
-      cloudBaseSdkPromise = null;
-      throw err;
-    });
+    const url = new URL('../../vendor/cloudbase-v3.esm.js', import.meta.url).href;
+    cloudBaseSdkPromise = import(url)
+      .then((mod) => mod.default || mod)
+      .catch((err) => {
+        cloudBaseSdkPromise = null;
+        console.warn('[cloudSync] 云存储 SDK 加载失败:', err?.message || err);
+        throw new Error('云存储 SDK 加载失败，请检查网络后重试。');
+      });
   }
   return cloudBaseSdkPromise;
 }
@@ -1325,9 +1319,8 @@ export class CloudSync {
       const app = cloudbase.init({
         env: envId,
         accessKey: PUBLISHABLE_KEY,
-        apiOrigin: `https://${envId}.api.tcloudbasegateway.com`,
       });
-      const auth = app.auth();
+      const auth = app.auth({ persistence: 'none' });
       if (auth?.signInAnonymously) {
         await withTimeout(auth.signInAnonymously(), 20000, '附件云端匿名登录超时。');
       }
@@ -1368,26 +1361,13 @@ export class CloudSync {
     const ext = fileExtensionFor(file, blob);
     const safeId = String(meta.id).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'file';
     const path = `attachments/${safeId}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    if (typeof app.uploadFile === 'function') {
-      const res = await withTimeout(
-        app.uploadFile({ cloudPath: path, filePath: file }),
-        60000,
-        `附件「${meta.name || meta.id}」上传云存储超时。`
-      );
-      const fileID = res?.fileID || res?.fileId || res?.data?.fileID || res?.data?.fileId || '';
-      if (fileID) return fileID;
-      throw new Error('云存储未返回文件 ID。');
-    }
-    if (app.storage?.from) {
-      const res = await withTimeout(
-        app.storage.from(STORAGE_BUCKET).upload(path, file),
-        60000,
-        `附件「${meta.name || meta.id}」上传云存储超时。`
-      );
-      if (res?.error) throw res.error;
-      return `pg:${path}`;
-    }
-    throw new Error('当前云开发 SDK 不支持文件上传。');
+    const res = await withTimeout(
+      app.storage.from(STORAGE_BUCKET).upload(path, file),
+      60000,
+      `附件「${meta.name || meta.id}」上传云存储超时。`
+    );
+    if (res?.error) throw res.error;
+    return `cos:${STORAGE_BUCKET}/${path}`;
   }
 
   // 上传前压缩图片，显著降低云存储与流量占用；失败则用原图
@@ -1566,6 +1546,23 @@ export class CloudSync {
       return base64ToBlob(payload.data, payload.type);
     }
     const app = await this.ensureStorageApp();
+    if (String(fileID).startsWith('cos:')) {
+      const rest = String(fileID).slice(4);
+      const slash = rest.indexOf('/');
+      const bucket = slash > 0 ? rest.slice(0, slash) : STORAGE_BUCKET;
+      const path = slash > 0 ? rest.slice(slash + 1) : rest;
+      const result = await withTimeout(
+        app.storage.from(bucket).download(path),
+        60000,
+        '云端附件下载超时。'
+      );
+      if (result?.error) throw result.error;
+      const data = result?.data ?? result;
+      if (typeof Blob !== 'undefined' && data instanceof Blob) return data;
+      if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) return new Blob([data]);
+      if (typeof data === 'string') return new Blob([data], { type: 'application/octet-stream' });
+      throw new Error('云端附件下载返回格式无效。');
+    }
     if (String(fileID).startsWith('pg:')) {
       const path = String(fileID).slice(3);
       const result = await withTimeout(
