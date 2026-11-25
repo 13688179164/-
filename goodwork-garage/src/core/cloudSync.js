@@ -326,6 +326,11 @@ export class CloudSync {
     this._pollDelay = POLL_INTERVAL_MS;
     this._lastChangeAt = Date.now();
     this._visibilityHandler = null;
+    // 云端版本缓存：id → updated_at，用于推送前按需拉取，避免整表预读
+    this._taskVersions = new Map();
+    this._procKeys = new Set();
+    this._fingerprintReady = false;
+    this._lastTombstoneAt = 0;
     // 附件云存储迁移状态
     this._migrating = false;
     this._migrationDisabledUntil = 0;
@@ -711,9 +716,22 @@ export class CloudSync {
     const mergedTasks = mergeByUpdatedAt(localTasks, remoteTasks);
     const mergedProc = mergeByUpdatedAt(localProc, remoteProcessed);
 
+    // 只有“本地独有 / 本地更新”的记录才需要回推；完全一致时跳过整轮写入
+    const remoteById = new Map(remoteTasks.map((t) => [t.id, t]));
+    const remoteProcKeys = new Set(
+      remoteProcessed.map((e) => `${e.taskId}|${e.eventDate}|${e.createdAt || ''}`)
+    );
+    const needPush = localTasks.some((t) => {
+      const remote = remoteById.get(t.id);
+      return !remote || tsMs(t.updatedAt) > tsMs(remote.updatedAt);
+    }) || localProc.some(
+      (e) => !remoteProcKeys.has(`${e.taskId}|${e.eventDate}|${e.createdAt || ''}`)
+    );
+
     console.log('[cloudSync] auto merge:',
       `localTasks=${localTasks.length} + remoteTasks=${remoteTasks.length} → merged=${mergedTasks.length}`,
-      `| localProc=${localProc.length} + remoteProc=${remoteProcessed.length} → merged=${mergedProc.length}`);
+      `| localProc=${localProc.length} + remoteProc=${remoteProcessed.length} → merged=${mergedProc.length}`,
+      `| needPush=${needPush}`);
 
     // 用合并结果覆盖本地状态
     this.applying = true;
@@ -725,14 +743,18 @@ export class CloudSync {
     } finally {
       this.applying = false;
     }
-    this.dirty = true;  // 合并后可能有本地独有数据需要上云
+    // 顺手刷新版本缓存，后续推送可直接按 id 比对
+    for (const t of remoteTasks) this._taskVersions.set(t.id, t.updatedAt || '');
+    this.dirty = needPush;
     this.localChangedAt = nowIso();
     this.lastPollAt = Date.now();
     this.lastRemoteUpdatedAt = mergedTasks.reduce((m, t) => (t.updatedAt > m ? t.updatedAt : m), '');
     this.settings.lastSyncAt = this.localChangedAt;
     this.saveSettings();
-    // 立刻推送合并后的结果到云端
-    await this.pushNow({ force: true, silent: true, _internal: true });
+    if (needPush) {
+      // 有差异才推送，避免每次开页都整轮写云
+      await this.pushNow({ force: true, silent: true, _internal: true });
+    }
   }
 
   applyRemote(tasks, processed, { force = false, silent = false } = {}) {
@@ -761,6 +783,9 @@ export class CloudSync {
     this.localVersion++;
     this.dirty = true;
     this.localChangedAt = nowIso();
+    // 本地一有动作就回到 3 秒轮询，避免深度空闲后反应变慢
+    this._lastChangeAt = Date.now();
+    this._pollDelay = POLL_INTERVAL_MS;
     // 🔧 不管当前是否 connected，都 schedulePush
     // 如果还没连，pushNow 内部会自动等 connected 后执行
     if (this.autoSync) this.schedulePush();
@@ -906,29 +931,58 @@ export class CloudSync {
       console.log('[cloudSync] pushNow ▶️ state.tasks=' + (state?.tasks?.length || 0) + ' processedEvents=' + (state?.processedEvents?.length || 0));
       const now = nowIso();
 
-      // 🔧 上传前先把云端数据拉下来做一次合并：按 id 取 updatedAt 较新的那条。
-      //    避免某台设备用"旧副本"覆盖另一台设备刚保存的新内容。
+      // 🔧 上传前只合并“可能变化”的任务：用轮询缓存的版本号挑出候选，
+      //    避免每次保存都整表预读（数据越多省得越多）。
+      const localTasksAll = state.tasks || [];
+      const candidates = localTasksAll.filter((t) => {
+        const cached = this._taskVersions.get(t.id);
+        return cached === undefined || String(t.updatedAt || '') !== String(cached);
+      });
+      const useFullPull = !this._taskVersions.size || candidates.length > 80;
       let remoteTasks = [];
       try {
-        const [rRows, attachmentRows] = await Promise.all([
-          pgRequest('GET', this.envId, 'goodwork_tasks', {
-            select: '*', order: ['updated_at.desc'], limit: 5000,
-          }),
-          pgRequest('GET', this.envId, 'goodwork_attachments', { select: '*' }),
-        ]);
-        remoteTasks = this.hydrateTaskAttachments(rRows, attachmentRows);
+        if (useFullPull) {
+          const [rRows, attachmentRows] = await Promise.all([
+            pgRequest('GET', this.envId, 'goodwork_tasks', {
+              select: '*', order: ['updated_at.desc'], limit: 5000,
+            }),
+            pgRequest('GET', this.envId, 'goodwork_attachments', { select: '*' }),
+          ]);
+          remoteTasks = this.hydrateTaskAttachments(rRows, attachmentRows);
+        } else if (candidates.length) {
+          const ids = candidates.map((t) => String(t.id)).filter(Boolean);
+          const idFilter = `in.(${ids.join(',')})`;
+          const [rRows, attachmentRows] = await Promise.all([
+            pgRequest('GET', this.envId, 'goodwork_tasks', {
+              select: '*', filter: { id: idFilter }, limit: 500,
+            }),
+            pgRequest('GET', this.envId, 'goodwork_attachments', {
+              select: '*', filter: { task_id: idFilter },
+            }),
+          ]);
+          remoteTasks = this.hydrateTaskAttachments(rRows, attachmentRows);
+        }
       } catch (e) {
         console.warn('[cloudSync] push 前拉取云端失败，跳过合并:', e?.message);
       }
-      const finalTasks = mergeByUpdatedAt(state.tasks || [], remoteTasks)
-        .filter((t) => !this.isTombstoned(t));
 
-      // 只上传真正变化的行：与云端 updatedAt 一致的任务视为未变化，跳过写入
+      let finalTasks;
+      if (useFullPull) {
+        finalTasks = mergeByUpdatedAt(localTasksAll, remoteTasks);
+      } else {
+        const candidateIds = new Set(candidates.map((t) => t.id));
+        const untouched = localTasksAll.filter((t) => !candidateIds.has(t.id));
+        finalTasks = [...untouched, ...mergeByUpdatedAt(candidates, remoteTasks)];
+      }
+      finalTasks = finalTasks.filter((t) => !this.isTombstoned(t));
+
+      // 只上传真正变化的行：优先用本次预读结果，其次用轮询缓存版本
       const remoteById = new Map(remoteTasks.map((t) => [t.id, t]));
       const tasksToPush = finalTasks.filter((t) => {
         const remote = remoteById.get(t.id);
-        if (!remote) return true;
-        return String(t.updatedAt || '') !== String(remote.updatedAt || '');
+        const remoteVersion = remote ? remote.updatedAt : this._taskVersions.get(t.id);
+        if (remoteVersion === undefined) return true;
+        return String(t.updatedAt || '') !== String(remoteVersion || '');
       });
 
       // --- 1. upsert 变化的 tasks（每条用它自己的 updatedAt，保持不变）---
@@ -1014,6 +1068,15 @@ export class CloudSync {
         10000, '更新 meta 超时'
       ).catch(() => { /* meta 失败不阻塞 */ });
 
+      // 推送成功后同步本地版本缓存与指纹，避免下一轮误判“云端有变化”再全量拉一次
+      if (this._fingerprintReady) {
+        for (const t of tasksToPush) this._taskVersions.set(t.id, t.updatedAt || now);
+        for (const r of procRows) {
+          this._procKeys.add(`${r.task_id}|${r.event_date}|${r.created_at}`);
+        }
+        this._fingerprint = this.buildFingerprint();
+      }
+
       this.localChangedAt = now;
       this.settings.lastSyncAt = now;
       this.saveSettings();
@@ -1068,6 +1131,7 @@ export class CloudSync {
     this._fingerprint = null;
     this._pollDelay = POLL_INTERVAL_MS;
     this._lastChangeAt = Date.now();
+    this._lastTombstoneAt = 0;
     this._bindVisibilityPoll();
     this.scheduleNextPoll(true);
     // 🔧 终极保险：每 15 秒自动把 localStorage 数据推上云（不管 markLocalChange 有没有被调用）
@@ -1094,6 +1158,9 @@ export class CloudSync {
         this.pollTimer = null;
         return;
       }
+      this._lastChangeAt = Date.now();
+      this._pollDelay = POLL_INTERVAL_MS;
+      this._lastTombstoneAt = 0;
       this.pollTick().finally(() => this.scheduleNextPoll(true));
     };
     document.addEventListener('visibilitychange', this._visibilityHandler);
@@ -1133,14 +1200,38 @@ export class CloudSync {
         select: 'task_id,event_date,created_at', order: ['created_at.desc'], limit: 2000,
       }),
     ]);
+    const taskVersions = new Map();
+    const procKeys = new Set();
     const parts = [];
-    for (const r of taskRows) parts.push(`t:${r.id}:${r.updated_at || ''}`);
-    for (const r of procRows) parts.push(`p:${r.task_id}:${r.event_date}:${r.created_at || ''}`);
-    parts.sort();
-    const s = parts.join('|');
+    for (const r of taskRows) {
+      const v = r.updated_at || '';
+      taskVersions.set(r.id, v);
+      parts.push(`t:${r.id}:${v}`);
+    }
+    for (const r of procRows) {
+      const k = `${r.task_id}|${r.event_date}|${r.created_at || ''}`;
+      procKeys.add(k);
+      parts.push(`p:${k}`);
+    }
+    this._taskVersions = taskVersions;
+    this._procKeys = procKeys;
+    this._fingerprintReady = true;
+    return this.hashParts(parts);
+  }
+
+  hashParts(parts) {
+    const sorted = [...parts].sort();
+    const s = sorted.join('|');
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-    return `${parts.length}:${h}`;
+    return `${sorted.length}:${h}`;
+  }
+
+  buildFingerprint() {
+    const parts = [];
+    for (const [id, v] of this._taskVersions) parts.push(`t:${id}:${v || ''}`);
+    for (const k of this._procKeys) parts.push(`p:${k}`);
+    return this.hashParts(parts);
   }
 
   tombstoneSignature() {
@@ -1152,9 +1243,12 @@ export class CloudSync {
     if (changed) {
       this._lastChangeAt = now;
       this._pollDelay = POLL_INTERVAL_MS;
-    } else if (now - this._lastChangeAt > 60000) {
-      this._pollDelay = 15000;
+      return;
     }
+    const idle = now - this._lastChangeAt;
+    if (idle > 10 * 60 * 1000) this._pollDelay = 60000;
+    else if (idle > 60 * 1000) this._pollDelay = 15000;
+    else this._pollDelay = POLL_INTERVAL_MS;
   }
 
   async pollTick() {
@@ -1162,11 +1256,13 @@ export class CloudSync {
     this._pollCount = (this._pollCount || 0) + 1;
     try {
       let forceFull = this._pollCount === 1;
-      // 删除墓碑每 10 次轮询检查一次；有变化再触发全量
-      if (this._pollCount % 10 === 0) {
+      // 删除墓碑：最多每 60 秒检查一次（空闲时不会拖到十几分钟）
+      const nowTs = Date.now();
+      if (!this._lastTombstoneAt || nowTs - this._lastTombstoneAt > 60000) {
         const before = this.tombstoneSignature();
         await this.loadTombstonesFromCloud();
         if (this.tombstoneSignature() !== before) forceFull = true;
+        this._lastTombstoneAt = nowTs;
       }
       let fingerprint = null;
       try { fingerprint = await this.computeRemoteFingerprint(); } catch { fingerprint = null; }

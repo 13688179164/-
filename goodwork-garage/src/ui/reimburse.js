@@ -7,7 +7,7 @@ import {
   EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
   BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261124v923';
-import { CloudSync } from '../core/cloudSync.js?v=20261125v934';
+import { CloudSync } from '../core/cloudSync.js?v=20261125v935';
 
 // 历史遗留的内置示例任务（GW-RB-SAMPLE-*），一律过滤不再展示/同步
 function isSampleTask(t) {
