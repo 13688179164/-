@@ -297,8 +297,6 @@ export class ReimburseBoard {
     this.statementOpen = false;
     this.statementMonth = currentMonthValue();
     this.cloudOpen = false;
-    this.cloudAttachmentsOpen = false;
-    this.activeCloudAttachmentId = '';
     this.cloudBusy = false;
     this.applyingCloud = false;
     this.previewUrl = null;
@@ -571,9 +569,6 @@ export class ReimburseBoard {
             <button type="button" class="rb-cloud-btn" data-rb="cloud" id="rbCloudBtn" title="腾讯云开发 · 多设备同步">
               ${ICON.cloud}<span id="rbCloudLabel">云同步</span><i class="rb-cloud-dot" id="rbCloudDot"></i>
             </button>
-            <button type="button" class="rb-invoice-btn rb-files-btn" data-rb="attachments" title="云端附件 · 查看和下载所有已保存附件">
-              ${ICON.paperclip}<span>云端附件</span>
-            </button>
             <button type="button" class="rb-invoice-btn" data-rb="invoice" title="发票追踪 · 自动抓取已报销中有发票的记录">
               ${ICON.invoice}<span>发票追踪</span><b class="rb-inv-badge" id="rbInvoiceBadge">0</b>
             </button>
@@ -815,24 +810,6 @@ export class ReimburseBoard {
         </div>
       </div>
 
-      <div class="rb-modal rb-files-modal" id="rbCloudAttachmentsModal" aria-hidden="true">
-        <div class="rb-files-sheet">
-          <header class="rb-report-head">
-            <div>
-              <span class="rb-export-kicker">CLOUD ATTACHMENTS</span>
-              <h2>云端附件</h2>
-              <p id="rbCloudAttachmentsMeta">所有报销记录中保存的附件</p>
-            </div>
-            <div class="rb-report-head-actions">
-              <button type="button" class="rb-btn ghost" data-rb="attachments-refresh">${ICON.sync}<span>刷新</span></button>
-              <button type="button" class="rb-icon-btn" data-rb="attachments-close" aria-label="关闭云端附件">${ICON.close}</button>
-            </div>
-          </header>
-          <div class="rb-files-body" id="rbCloudAttachmentsBody"></div>
-          <footer class="rb-files-foot">图片和 PDF 可直接预览；其他文档点击查看或下载按钮获取原文件。</footer>
-        </div>
-      </div>
-
       <div class="rb-modal rb-cloud-modal" id="rbCloudModal" aria-hidden="true">
         <div class="rb-cloud-sheet">
           <header class="rb-report-head">
@@ -1000,9 +977,6 @@ export class ReimburseBoard {
       cloudDomain: $('#rbCloudDomain', shell),
       cloudConnectBtn: $('#rbCloudConnectBtn', shell),
       cloudDisconnectBtn: $('#rbCloudDisconnectBtn', shell),
-      cloudAttachments: $('#rbCloudAttachmentsModal', shell),
-      cloudAttachmentsMeta: $('#rbCloudAttachmentsMeta', shell),
-      cloudAttachmentsBody: $('#rbCloudAttachmentsBody', shell),
     };
     this.cardRects = new Map();
   }
@@ -1177,7 +1151,6 @@ export class ReimburseBoard {
       if (this.statementOpen) { this.closeStatement(); return; }
       if (this.invoiceOpen) { this.closeInvoice(); return; }
       if ($('#rbPreviewModal', this.root).classList.contains('is-open')) { this.closePreview(); return; }
-      if (this.cloudAttachmentsOpen) { this.closeCloudAttachments(); return; }
       if (this.el.confirm.classList.contains('is-open')) { this.closeConfirm(); return; }
       if (this.reportOpen) { this.closeReport(); return; }
       if (this.drawerOpen) { this.closeDrawer(); return; }
@@ -1217,7 +1190,6 @@ export class ReimburseBoard {
     this.closeStatement(true);
     this.closeInvoice(true);
     this.closeCloudModal(true);
-    this.closeCloudAttachments(true);
     this.closeConfirm(true);
     this.cancelDrag();
     this.root.classList.remove('is-visible');
@@ -1286,10 +1258,6 @@ export class ReimburseBoard {
       case 'statement-close': this.closeStatement(); break;
       case 'statement-export': this.exportStatement(); break;
       case 'cloud': this.openCloudModal(); break;
-      case 'attachments': this.openCloudAttachments(); break;
-      case 'attachments-close': this.closeCloudAttachments(); break;
-      case 'attachments-refresh': this.openCloudAttachments(); break;
-      case 'attachment-open': this.previewAttachment(el.dataset.id); break;
       case 'cloud-close': this.closeCloudModal(); break;
       case 'cloud-connect': this.cloudConnect(); break;
       case 'cloud-disconnect': this.cloudDisconnect(); break;
@@ -2730,7 +2698,7 @@ export class ReimburseBoard {
     document.body.classList.toggle(
       'is-reimburse-modal',
       this.reportOpen || this.invoiceOpen || this.statementOpen || this.cloudOpen
-        || this.cloudAttachmentsOpen || this.el.preview.classList.contains('is-open')
+        || this.el.preview.classList.contains('is-open')
     );
   }
 
@@ -3099,110 +3067,6 @@ export class ReimburseBoard {
       }
     }
     return null;
-  }
-
-  attachmentWebUrl(id) {
-    const url = new URL(window.location.pathname, window.location.origin);
-    url.searchParams.set('nointro', '1');
-    url.searchParams.set('cloudAttachment', id);
-    return url.toString();
-  }
-
-  async openCloudAttachments(targetId = '') {
-    this.cloudAttachmentsOpen = true;
-    this.activeCloudAttachmentId = targetId;
-    this.el.cloudAttachments.classList.add('is-open');
-    this.el.cloudAttachments.setAttribute('aria-hidden', 'false');
-    this.syncModalBodyClass();
-    this.renderCloudAttachments();
-    try {
-      if (this.cloud?.isConnected()) await this.cloud.pullNow({ silent: true });
-      else if (this.cloud) await this.cloud.init();
-    } catch (err) {
-      console.warn('云端附件列表刷新失败', err);
-      this.toast('附件列表刷新失败', '当前显示已同步到本机的附件，请稍后重试。');
-    }
-    if (!this.cloudAttachmentsOpen) return;
-    this.renderCloudAttachments();
-    if (!targetId) return;
-    const row = $(`[data-cloud-attachment="${targetId}"]`, this.el.cloudAttachmentsBody);
-    row?.scrollIntoView({ block: 'center' });
-    if (this.findAttachmentMeta(targetId)) await this.previewAttachment(targetId);
-    else this.toast('未找到附件', '云端附件记录可能已删除，或尚未同步到当前设备。');
-  }
-
-  closeCloudAttachments(immediate = false) {
-    this.cloudAttachmentsOpen = false;
-    this.activeCloudAttachmentId = '';
-    this.el.cloudAttachments.classList.remove('is-open');
-    this.el.cloudAttachments.setAttribute('aria-hidden', 'true');
-    if (this.el.preview.classList.contains('is-open')) this.closePreview();
-    this.syncModalBodyClass();
-    void immediate;
-  }
-
-  renderCloudAttachments() {
-    if (!this.el.cloudAttachmentsBody) return;
-    const entries = this.tasks.flatMap((task) => (task.attachments || []).map((meta) => ({ task, meta })))
-      .sort((a, b) => String(b.task.appliedAt || '').localeCompare(String(a.task.appliedAt || '')));
-    const cloudCount = entries.filter(({ meta }) => !!meta.cloudFileId).length;
-    this.el.cloudAttachmentsMeta.textContent = `共 ${entries.length} 个附件 · ${cloudCount} 个已保存云端 · ${entries.length - cloudCount} 个本机待同步`;
-    this.el.cloudAttachmentsBody.innerHTML = entries.length ? entries.map(({ task, meta }) => {
-      const image = isImageFile({ name: meta.name, type: meta.type });
-      const active = meta.id === this.activeCloudAttachmentId ? ' is-target' : '';
-      return `
-        <article class="rb-file-center-row${active}" data-cloud-attachment="${esc(meta.id)}">
-          <span class="rb-file-center-icon">${image ? ICON.image : ICON.file}</span>
-          <div class="rb-file-center-copy">
-            <b>${esc(meta.name || '附件')}</b>
-            <span>${esc(task.applicant || '未填写')} · ${esc(task.department || '')} / ${esc(task.category || '')} · ${esc(formatDateTime(task.appliedAt))}</span>
-          </div>
-          <div class="rb-file-center-meta">
-            <b>${formatBytes(meta.size)}</b>
-            <span class="${meta.cloudFileId ? 'is-cloud' : 'is-local'}">${meta.cloudFileId ? '云端已保存' : '本机待同步'}</span>
-          </div>
-          <button type="button" class="rb-file-center-open" data-rb="attachment-open" data-id="${esc(meta.id)}">${image ? ICON.image : ICON.file}<span>查看</span></button>
-          <button type="button" class="rb-attach-download" data-download-attach="${esc(meta.id)}" aria-label="下载 ${esc(meta.name || '附件')}">${ICON.download}</button>
-        </article>`;
-    }).join('') : '<div class="rb-file-center-empty">还没有保存的附件<br><small>新增报销时添加附件，保存后会自动同步到云端。</small></div>';
-  }
-
-  async previewAttachment(id) {
-    const meta = this.findAttachmentMeta(id);
-    if (!meta) {
-      this.toast('附件不存在', '未找到该附件的记录。');
-      return;
-    }
-    const blob = await this.ensureAttachmentBlob(meta);
-    const name = meta.name || blob?.name || '附件';
-    if (!blob) {
-      this.toast(
-        '附件暂时无法查看',
-        '本机没有缓存，云端也没有取回文件。请确认网络正常后点「刷新」重试；若仍失败，请在最初上传该附件的设备上打开附件中心重新同步。'
-      );
-      return;
-    }
-    const type = blob.type || meta.type || '';
-    const image = isImageFile({ name, type });
-    const pdf = type === 'application/pdf' || /\.pdf$/i.test(name);
-    this.closePreview();
-    if (!image && !pdf) {
-      this.el.previewContent.innerHTML = `
-        <div class="rb-preview-doc">
-          <span class="rb-preview-doc-icon">${ICON.file}</span>
-          <h3>${esc(name)}</h3>
-          <p>${formatBytes(meta.size || blob.size)} · 该文档无法在浏览器内直接预览，请下载原文件后在本地打开。</p>
-          <button type="button" class="rb-btn primary" data-download-attach="${esc(meta.id)}">${ICON.download}<span>下载原文件</span></button>
-        </div>`;
-    } else {
-      this.previewUrl = URL.createObjectURL(blob);
-      this.el.previewContent.innerHTML = image
-        ? `<img src="${this.previewUrl}" alt="${esc(name)}" />`
-        : `<iframe src="${this.previewUrl}" title="${esc(name)}"></iframe>`;
-    }
-    this.el.preview.classList.add('is-open');
-    this.el.preview.setAttribute('aria-hidden', 'false');
-    this.syncModalBodyClass();
   }
 
   async ensureAttachmentBlob(meta) {
@@ -3650,7 +3514,7 @@ export class ReimburseBoard {
       pv.getCell('A2').font = { name: '宋体', size: 9, color: { argb: 'FF6B7280' } };
       pv.getRow(2).height = 22;
       pv.mergeCells('A3:C3');
-      pv.getCell('A3').value = '在「成本明细」点击「查看大图」可跳转到本页；PDF / Word / Excel 文档已嵌入预览卡片，点击右侧说明文字可打开云端附件中心查看或下载原文件。';
+      pv.getCell('A3').value = '在「成本明细」点击「查看大图」可跳转到本页；图片附件按原图直接嵌入，PDF / Word / Excel 文档嵌入类型示意图。';
       pv.getCell('A3').font = { name: '宋体', size: 8, color: { argb: 'FF8A8A8A' } };
       pv.getCell('A3').alignment = { vertical: 'middle', wrapText: true };
       pv.getRow(3).height = 30;
@@ -3669,7 +3533,7 @@ export class ReimburseBoard {
           if (item.image) {
             pv.getRow(item.previewRow).height = Math.max(80, Math.ceil(item.previewHeight / 1.333) + 8);
             try {
-              const imageId = wb.addImage({ base64: item.image.base64, extension: 'png' });
+              const imageId = wb.addImage({ base64: item.image.base64, extension: item.image.extension || 'png' });
               pv.addImage(imageId, {
                 tl: { col: 0.03, row: item.previewRow - 1 + 0.04 },
                 ext: { width: item.previewWidth, height: item.previewHeight },
@@ -3697,20 +3561,16 @@ export class ReimburseBoard {
             }
             pv.mergeCells(`B${item.previewRow}:C${item.previewRow}`);
             const metaCell = pv.getCell(`B${item.previewRow}`);
-            metaCell.value = {
-              text: `${item.name}\n${formatBytes(item.size)} · ${item.isImage ? '图片凭证' : '文档附件'}${item.tileUsed ? '（示意图）' : ''}\n点击打开云端附件查看原文件`,
-              hyperlink: this.attachmentWebUrl(item.id),
-              tooltip: '打开云端附件中心查看或下载原文件',
-            };
-            metaCell.font = { name: '宋体', size: 9, color: { argb: 'FF1F5FA8' }, underline: true };
+            metaCell.value = `${item.name}\n${formatBytes(item.size)} · ${item.isImage ? '图片凭证' : '文档附件'}${item.tileUsed ? '（示意图）' : ''}`;
+            metaCell.font = { name: '宋体', size: 9, color: { argb: 'FF374151' } };
             metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
           } else {
             pv.getRow(item.previewRow).height = 40;
             pv.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
             const docCell = pv.getCell(`A${item.previewRow}`);
             docCell.value = item.missing
-              ? `附件未同步：${item.name}（${formatBytes(item.size)}）· 请在最初上传该附件的设备打开「云端附件」完成同步后再导出`
-              : `${item.isImage ? '图片凭证' : '文档附件'}：${item.name}（${formatBytes(item.size)}）· 预览生成失败，请点击链接在云端附件中查看`;
+              ? `附件未同步：${item.name}（${formatBytes(item.size)}）· 请在最初上传该附件的设备重新导出`
+              : `${item.isImage ? '图片凭证' : '文档附件'}：${item.name}（${formatBytes(item.size)}）· 预览生成失败`;
             docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
             docCell.font = { name: '宋体', size: 9, color: { argb: 'FF6B5330' } };
             docCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
@@ -4331,6 +4191,38 @@ export class ReimburseBoard {
     }
   }
 
+  async blobToBase64String(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 32768) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    }
+    return btoa(binary);
+  }
+
+  async imageSourceForExcel(blob, meta) {
+    const name = String(meta?.name || '').toLowerCase();
+    const type = String(blob?.type || meta?.type || '').toLowerCase();
+    let extension = '';
+    if (type.includes('jpeg') || type.includes('jpg') || /\.(jpe?g)$/.test(name)) extension = 'jpeg';
+    else if (type.includes('png') || /\.png$/.test(name)) extension = 'png';
+    else if (type.includes('gif') || /\.gif$/.test(name)) extension = 'gif';
+    if (!extension) return null;
+    const base64 = await this.blobToBase64String(blob);
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = await this.loadImageFromUrl(url);
+      return {
+        base64,
+        extension,
+        width: img.naturalWidth || img.width || 640,
+        height: img.naturalHeight || img.height || 480,
+      };
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   async makeDocumentPreviewPng(meta) {
     const W = 420;
     const H = 300;
@@ -4428,7 +4320,12 @@ export class ReimburseBoard {
       if (shown >= maxShown || x + cellW > W - 4) break;
       if (item.image) {
         try {
-          const img = await this.loadImageFromUrl(`data:image/png;base64,${item.image.base64}`);
+          const mime = item.image.extension === 'jpeg'
+            ? 'image/jpeg'
+            : item.image.extension === 'gif'
+              ? 'image/gif'
+              : 'image/png';
+          const img = await this.loadImageFromUrl(`data:${mime};base64,${item.image.base64}`);
           const iw = img.naturalWidth || img.width || 1;
           const ih = img.naturalHeight || img.height || 1;
           const ratio = Math.max(cellW / iw, cellH / ih);
@@ -4509,10 +4406,19 @@ export class ReimburseBoard {
         let tileUsed = false;
         if (blob && isImage) {
           try {
-            image = await this.blobToPreviewPng(blob);
+            // 优先直接嵌入原图（PNG / JPEG / GIF），不重新编码
+            image = await this.imageSourceForExcel(blob, meta);
           } catch (err) {
-            previewError = err?.message || '图片解析失败';
-            console.warn('附件图片预览生成失败', meta.name, err);
+            console.warn('原图读取失败，尝试转换后嵌入', meta.name, err);
+          }
+          if (!image) {
+            try {
+              image = await this.blobToPreviewPng(blob);
+              image.extension = 'png';
+            } catch (err) {
+              previewError = err?.message || '图片解析失败';
+              console.warn('附件图片预览生成失败', meta.name, err);
+            }
           }
         }
         let docImage = null;
@@ -4811,7 +4717,7 @@ export class ReimburseBoard {
       preview.getCell('A2').font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF6B7280' } };
       preview.getRow(2).height = 22;
       preview.mergeCells('A3:C3');
-      preview.getCell('A3').value = '点击报销明细附件列可跳转到本页。图片凭证与文档附件预览均已嵌入；PDF / Word / Excel 文档可点击右侧说明文字，在云端附件中心查看或下载原文件。';
+      preview.getCell('A3').value = '点击报销明细附件列可跳转到本页。图片附件按原图直接嵌入单元格，PDF / Word / Excel 文档嵌入类型示意图。';
       preview.getCell('A3').font = { name: 'Microsoft YaHei', size: 8, color: { argb: 'FF8A8A8A' } };
       preview.getCell('A3').alignment = { vertical: 'middle', wrapText: true };
       preview.getRow(3).height = 30;
@@ -4831,7 +4737,7 @@ export class ReimburseBoard {
           if (item.image) {
             preview.getRow(item.previewRow).height = Math.max(60, Math.ceil(item.previewHeight / 1.333) + 8);
             try {
-              const imageId = wb.addImage({ base64: item.image.base64, extension: 'png' });
+              const imageId = wb.addImage({ base64: item.image.base64, extension: item.image.extension || 'png' });
               preview.addImage(imageId, {
                 tl: { col: 0.03, row: item.previewRow - 1 + 0.04 },
                 ext: { width: item.previewWidth, height: item.previewHeight },
@@ -4859,20 +4765,16 @@ export class ReimburseBoard {
             }
             preview.mergeCells(`B${item.previewRow}:C${item.previewRow}`);
             const metaCell = preview.getCell(`B${item.previewRow}`);
-            metaCell.value = {
-              text: `${item.name}\n${formatBytes(item.size)} · ${item.isImage ? '图片凭证' : '文档附件'}${item.tileUsed ? '（示意图）' : ''}\n点击打开云端附件查看原文件`,
-              hyperlink: this.attachmentWebUrl(item.id),
-              tooltip: '打开云端附件中心查看或下载原文件',
-            };
-            metaCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF1F5FA8' }, underline: true };
+            metaCell.value = `${item.name}\n${formatBytes(item.size)} · ${item.isImage ? '图片凭证' : '文档附件'}${item.tileUsed ? '（示意图）' : ''}`;
+            metaCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF374151' } };
             metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
           } else {
             preview.getRow(item.previewRow).height = 40;
             preview.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
             const docCell = preview.getCell(`A${item.previewRow}`);
             docCell.value = item.missing
-              ? `附件未同步：${item.name}（${formatBytes(item.size)}）· 请在最初上传该附件的设备打开「云端附件」完成同步后再导出`
-              : `${item.isImage ? '图片凭证' : '文档附件'}：${item.name}（${formatBytes(item.size)}）· 预览生成失败，请点击链接在云端附件中查看`;
+              ? `附件未同步：${item.name}（${formatBytes(item.size)}）· 请在最初上传该附件的设备重新导出`
+              : `${item.isImage ? '图片凭证' : '文档附件'}：${item.name}（${formatBytes(item.size)}）· 预览生成失败`;
             docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
             docCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF6B5330' } };
             docCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
