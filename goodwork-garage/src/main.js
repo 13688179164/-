@@ -23,7 +23,7 @@ import { InteractionSystem } from './systems/interaction.js?v=20261123v93';
 import { QuestSystem } from './systems/quest.js?v=20261123v93';
 import { AudioEngine } from './audio.js?v=20261123v93';
 import { UI } from './ui/ui.js?v=20261123v93';
-import { ReimburseBoard } from './ui/reimburse.js?v=20261125v929';
+import { ReimburseBoard } from './ui/reimburse.js?v=20261125v930';
 import { CloudSync } from './core/cloudSync.js?v=20261124v928';
 
 // 🛠️ 在任何 UI 初始化之前，先建立一个独立的 CloudSync 单例

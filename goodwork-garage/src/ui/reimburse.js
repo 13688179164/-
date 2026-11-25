@@ -3171,23 +3171,32 @@ export class ReimburseBoard {
       return;
     }
     const blob = await this.ensureAttachmentBlob(meta);
+    const name = meta.name || blob?.name || '附件';
     if (!blob) {
-      this.toast('附件无法查看', '本机缓存和云端均未找到文件，请在原上传设备执行附件同步。');
+      this.toast(
+        '附件暂时无法查看',
+        '本机没有缓存，云端也没有取回文件。请确认网络正常后点「刷新」重试；若仍失败，请在最初上传该附件的设备上打开附件中心重新同步。'
+      );
       return;
     }
-    const name = meta.name || blob.name || '附件';
     const type = blob.type || meta.type || '';
     const image = isImageFile({ name, type });
     const pdf = type === 'application/pdf' || /\.pdf$/i.test(name);
-    if (!image && !pdf) {
-      await this.downloadAttachment(id);
-      return;
-    }
     this.closePreview();
-    this.previewUrl = URL.createObjectURL(blob);
-    this.el.previewContent.innerHTML = image
-      ? `<img src="${this.previewUrl}" alt="${esc(name)}" />`
-      : `<iframe src="${this.previewUrl}" title="${esc(name)}"></iframe>`;
+    if (!image && !pdf) {
+      this.el.previewContent.innerHTML = `
+        <div class="rb-preview-doc">
+          <span class="rb-preview-doc-icon">${ICON.file}</span>
+          <h3>${esc(name)}</h3>
+          <p>${formatBytes(meta.size || blob.size)} · 该文档无法在浏览器内直接预览，请下载原文件后在本地打开。</p>
+          <button type="button" class="rb-btn primary" data-download-attach="${esc(meta.id)}">${ICON.download}<span>下载原文件</span></button>
+        </div>`;
+    } else {
+      this.previewUrl = URL.createObjectURL(blob);
+      this.el.previewContent.innerHTML = image
+        ? `<img src="${this.previewUrl}" alt="${esc(name)}" />`
+        : `<iframe src="${this.previewUrl}" title="${esc(name)}"></iframe>`;
+    }
     this.el.preview.classList.add('is-open');
     this.el.preview.setAttribute('aria-hidden', 'false');
     this.syncModalBodyClass();
@@ -3198,21 +3207,24 @@ export class ReimburseBoard {
     let blob = null;
     try { blob = await readAttachmentBlob(meta.id); } catch { blob = null; }
     if (blob) return blob;
-    if (meta.cloudFileId && this.cloud?.isConnected()) {
-      try {
-        const downloaded = await this.cloud.downloadAttachment(meta.cloudFileId);
-        if (downloaded) {
-          const file = new File([downloaded], meta.name || '附件', {
-            type: meta.type || 'application/octet-stream',
-          });
-          await storeAttachmentBlob(meta.id, file);
-          return file;
-        }
-      } catch (err) {
-        console.warn('云端附件下载失败', meta.name, err);
-      }
+    if (!meta.cloudFileId || !this.cloud) return null;
+    try {
+      if (!this.cloud.isConnected()) await this.cloud.init();
+      if (!this.cloud.isConnected()) return null;
+      const downloaded = await Promise.race([
+        this.cloud.downloadAttachment(meta.cloudFileId),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('附件下载超时')), 30000)),
+      ]);
+      if (!downloaded) return null;
+      const file = new File([downloaded], meta.name || '附件', {
+        type: meta.type || downloaded.type || 'application/octet-stream',
+      });
+      await storeAttachmentBlob(meta.id, file);
+      return file;
+    } catch (err) {
+      console.warn('云端附件下载失败', meta.name, err?.message || err);
+      return null;
     }
-    return null;
   }
 
   statementTasks(month) {
@@ -3631,11 +3643,11 @@ export class ReimburseBoard {
       pv.getCell('A1').alignment = { horizontal: 'left', vertical: 'middle' };
       pv.getRow(1).height = 32;
       pv.mergeCells('A2:C2');
-      pv.getCell('A2').value = `${data.count} 笔已报销成本 · ${attachmentData.total || 0} 个附件 · 图片凭证按原图比例嵌入，可直接放大查看`;
+      pv.getCell('A2').value = `${data.count} 笔已报销成本 · ${attachmentData.total || 0} 个附件 · 图片与文档附件预览均嵌入表格，可直接查看`;
       pv.getCell('A2').font = { name: '宋体', size: 9, color: { argb: 'FF6B7280' } };
       pv.getRow(2).height = 22;
       pv.mergeCells('A3:C3');
-      pv.getCell('A3').value = '在「成本明细」点击「查看大图」可跳转到本页；PDF / Word / Excel 等文档可点击下方链接，在云端附件中心查看或下载原文件。';
+      pv.getCell('A3').value = '在「成本明细」点击「查看大图」可跳转到本页；PDF / Word / Excel 文档已嵌入预览卡片，点击右侧说明文字可打开云端附件中心查看或下载原文件。';
       pv.getCell('A3').font = { name: '宋体', size: 8, color: { argb: 'FF8A8A8A' } };
       pv.getCell('A3').alignment = { vertical: 'middle', wrapText: true };
       pv.getRow(3).height = 30;
@@ -3668,19 +3680,36 @@ export class ReimburseBoard {
             metaCell.value = `${item.name}\n${formatBytes(item.size)} · 图片凭证`;
             metaCell.font = { name: '宋体', size: 9, color: { argb: 'FF374151' } };
             metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+          } else if (item.docImage) {
+            pv.getRow(item.previewRow).height = Math.max(80, Math.ceil(item.previewHeight / 1.333) + 8);
+            try {
+              const imageId = wb.addImage({ base64: item.docImage.base64, extension: 'png' });
+              pv.addImage(imageId, {
+                tl: { col: 0.03, row: item.previewRow - 1 + 0.04 },
+                ext: { width: item.previewWidth, height: item.previewHeight },
+                editAs: 'oneCell',
+              });
+            } catch (err) {
+              console.warn('附件预览图写入失败', err);
+            }
+            pv.mergeCells(`B${item.previewRow}:C${item.previewRow}`);
+            const metaCell = pv.getCell(`B${item.previewRow}`);
+            metaCell.value = {
+              text: `${item.name}\n${formatBytes(item.size)} · 文档附件\n点击打开云端附件查看原文件`,
+              hyperlink: this.attachmentWebUrl(item.id),
+              tooltip: '打开云端附件中心查看或下载原文件',
+            };
+            metaCell.font = { name: '宋体', size: 9, color: { argb: 'FF1F5FA8' }, underline: true };
+            metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
           } else {
             pv.getRow(item.previewRow).height = 40;
             pv.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
             const docCell = pv.getCell(`A${item.previewRow}`);
             docCell.value = item.missing
               ? `附件缓存缺失：${item.name}（${formatBytes(item.size)}）`
-              : {
-                text: `文档附件：${item.name}（${formatBytes(item.size)}）· 点击查看 / 下载原文件`,
-                hyperlink: this.attachmentWebUrl(item.id),
-                tooltip: '打开云端附件中心查看或下载原文件',
-              };
+              : `文档附件：${item.name}（${formatBytes(item.size)}）· 生成预览图失败，请在报销工作台重新导出`;
             docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
-            docCell.font = { name: '宋体', size: 9, color: { argb: item.missing ? 'FF6B5330' : 'FF1F5FA8' }, underline: !item.missing };
+            docCell.font = { name: '宋体', size: 9, color: { argb: 'FF6B5330' } };
             docCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
             docCell.border = border;
           }
@@ -4006,7 +4035,8 @@ export class ReimburseBoard {
         await injectLinks(links.preview, '成本明细');
         blob = new Blob([finalBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         if (attachmentData.byTask.size) {
-          embedNote = ` · ${attachmentData.byTask.size} 笔附件已嵌入，可点「查看大图」`;
+          const missingNote = attachmentData.missingCount ? `，${attachmentData.missingCount} 个未能取回` : '';
+          embedNote = ` · 附件预览已嵌入${missingNote}，可点「查看大图」`;
         }
       } catch (excelJsErr) {
         console.warn('月度报表附件嵌入失败，回退到普通 Excel', excelJsErr);
@@ -4295,6 +4325,76 @@ export class ReimburseBoard {
     }
   }
 
+  async makeDocumentPreviewPng(meta) {
+    const W = 420;
+    const H = 300;
+    const canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#f6f3ec';
+    ctx.fillRect(0, 0, W, 6);
+    ctx.strokeStyle = '#d7d0c1';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, W - 1, H - 1);
+
+    const ext = ((String(meta.name || '').match(/\.([A-Za-z0-9]{1,6})$/) || [])[1] || 'DOC').toUpperCase();
+    ctx.fillStyle = '#f7f1e5';
+    ctx.fillRect(28, 34, 108, 108);
+    ctx.strokeStyle = '#d8bd8c';
+    ctx.strokeRect(28.5, 34.5, 107, 107);
+    ctx.fillStyle = '#b08d57';
+    ctx.font = `bold ${ext.length > 3 ? 20 : 26}px "Microsoft YaHei","PingFang SC",sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText(ext, 82, 92);
+    ctx.fillStyle = '#8a7a5c';
+    ctx.font = '12px "Microsoft YaHei","PingFang SC",sans-serif';
+    ctx.fillText('文档附件', 82, 118);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#1f2937';
+    ctx.font = 'bold 15px "Microsoft YaHei","PingFang SC",sans-serif';
+    const name = String(meta.name || '附件');
+    const maxWidth = W - 176;
+    const lines = [];
+    let line = '';
+    for (const ch of name) {
+      const test = line + ch;
+      if (line && ctx.measureText(test).width > maxWidth) {
+        lines.push(line);
+        line = ch;
+        if (lines.length === 3) break;
+      } else {
+        line = test;
+      }
+    }
+    if (lines.length < 3 && line) lines.push(line);
+    const shown = lines.slice(0, 3);
+    if (lines.length === 3 && shown.join('').length < name.length) shown[2] += '…';
+    shown.forEach((text, i) => ctx.fillText(text, 156, 62 + i * 22));
+
+    const bottom = 62 + shown.length * 22 + 12;
+    ctx.fillStyle = '#6b7280';
+    ctx.font = '12px "Microsoft YaHei","PingFang SC",sans-serif';
+    ctx.fillText(formatBytes(meta.size), 156, bottom);
+    ctx.fillStyle = '#b08d57';
+    const typeLabel = String(meta.type || '').split('/')[1] || `${ext.toLowerCase()} 文档`;
+    ctx.fillText(typeLabel, 156, bottom + 20);
+
+    ctx.strokeStyle = '#ebe5d8';
+    ctx.beginPath();
+    ctx.moveTo(28, H - 48);
+    ctx.lineTo(W - 28, H - 48);
+    ctx.stroke();
+    ctx.fillStyle = '#8a8a8a';
+    ctx.font = '12px "Microsoft YaHei","PingFang SC",sans-serif';
+    ctx.fillText('点击表格右侧链接，在云端附件中心查看原文件', 28, H - 22);
+
+    return { base64: canvas.toDataURL('image/png').split(',')[1], width: W, height: H };
+  }
+
   async makeAttachmentStrip(items, opts = {}) {
     const W = opts.width || 186;
     const H = opts.height || 62;
@@ -4358,6 +4458,9 @@ export class ReimburseBoard {
   }
 
   async prepareExcelAttachments(stats, stripOpts = {}, previewOpts = {}) {
+    if (this.cloud && !this.cloud.isConnected()) {
+      try { await this.cloud.init(); } catch { /* 离线时仅导出本机缓存 */ }
+    }
     const previewMaxW = previewOpts.maxWidth || 420;
     const previewMaxH = previewOpts.maxHeight || 300;
     const byTask = new Map();
@@ -4379,6 +4482,18 @@ export class ReimburseBoard {
             console.warn('附件图片预览生成失败', meta.name, err);
           }
         }
+        let docImage = null;
+        if (blob && !isImage) {
+          try {
+            docImage = await this.makeDocumentPreviewPng({
+              name: meta.name || '附件',
+              type: meta.type || '',
+              size: Number(meta.size) || blob.size || 0,
+            });
+          } catch (err) {
+            console.warn('文档附件预览图生成失败', meta.name, err);
+          }
+        }
         if (image) imageCount++;
         else if (isImage) missingCount++;
         else docCount++;
@@ -4389,6 +4504,7 @@ export class ReimburseBoard {
           type: meta.type || '',
           isImage,
           image,
+          docImage,
           missing: !blob,
           previewRow: 0,
           previewWidth: 0,
@@ -4412,10 +4528,11 @@ export class ReimburseBoard {
       row += 1;
       for (const item of entry.items) {
         item.previewRow = row;
-        if (item.image) {
-          const scale = Math.min(1, previewMaxW / item.image.width, previewMaxH / item.image.height);
-          item.previewWidth = Math.max(1, Math.round(item.image.width * scale));
-          item.previewHeight = Math.max(1, Math.round(item.image.height * scale));
+        const picture = item.image || item.docImage;
+        if (picture) {
+          const scale = Math.min(1, previewMaxW / picture.width, previewMaxH / picture.height);
+          item.previewWidth = Math.max(1, Math.round(picture.width * scale));
+          item.previewHeight = Math.max(1, Math.round(picture.height * scale));
         }
         row += 1;
       }
@@ -4650,11 +4767,11 @@ export class ReimburseBoard {
       preview.getCell('A1').alignment = { horizontal: 'left', vertical: 'middle' };
       preview.getRow(1).height = 34;
       preview.mergeCells('A2:C2');
-      preview.getCell('A2').value = `${stats.count} 笔报销 · ${attachmentData.total} 个附件 · 图片凭证可直接预览`;
+      preview.getCell('A2').value = `${stats.count} 笔报销 · ${attachmentData.total} 个附件 · 图片与文档附件预览均嵌入表格，可直接查看`;
       preview.getCell('A2').font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF6B7280' } };
       preview.getRow(2).height = 22;
       preview.mergeCells('A3:C3');
-      preview.getCell('A3').value = '点击报销明细附件列可跳转到本页。图片凭证已嵌入；PDF / Word / Excel 等文档可点击下方链接，在云端附件中心查看或下载原文件。';
+      preview.getCell('A3').value = '点击报销明细附件列可跳转到本页。图片凭证与文档附件预览均已嵌入；PDF / Word / Excel 文档可点击右侧说明文字，在云端附件中心查看或下载原文件。';
       preview.getCell('A3').font = { name: 'Microsoft YaHei', size: 8, color: { argb: 'FF8A8A8A' } };
       preview.getCell('A3').alignment = { vertical: 'middle', wrapText: true };
       preview.getRow(3).height = 30;
@@ -4688,19 +4805,36 @@ export class ReimburseBoard {
             metaCell.value = `${item.name}\n${formatBytes(item.size)} · 图片凭证`;
             metaCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF374151' } };
             metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+          } else if (item.docImage) {
+            preview.getRow(item.previewRow).height = Math.max(60, Math.ceil(item.previewHeight / 1.333) + 8);
+            try {
+              const imageId = wb.addImage({ base64: item.docImage.base64, extension: 'png' });
+              preview.addImage(imageId, {
+                tl: { col: 0.03, row: item.previewRow - 1 + 0.04 },
+                ext: { width: item.previewWidth, height: item.previewHeight },
+                editAs: 'oneCell',
+              });
+            } catch (err) {
+              console.warn('附件预览图写入失败', err);
+            }
+            preview.mergeCells(`B${item.previewRow}:C${item.previewRow}`);
+            const metaCell = preview.getCell(`B${item.previewRow}`);
+            metaCell.value = {
+              text: `${item.name}\n${formatBytes(item.size)} · 文档附件\n点击打开云端附件查看原文件`,
+              hyperlink: this.attachmentWebUrl(item.id),
+              tooltip: '打开云端附件中心查看或下载原文件',
+            };
+            metaCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF1F5FA8' }, underline: true };
+            metaCell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
           } else {
             preview.getRow(item.previewRow).height = 40;
             preview.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
             const docCell = preview.getCell(`A${item.previewRow}`);
             docCell.value = item.missing
               ? `附件缓存缺失：${item.name}（${formatBytes(item.size)}）`
-              : {
-                text: `文档附件：${item.name}（${formatBytes(item.size)}）· 点击查看 / 下载原文件`,
-                hyperlink: this.attachmentWebUrl(item.id),
-                tooltip: '打开云端附件中心查看或下载原文件',
-              };
+              : `文档附件：${item.name}（${formatBytes(item.size)}）· 生成预览图失败，请在报销工作台重新导出`;
             docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
-            docCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: item.missing ? 'FF6B5330' : 'FF1F5FA8' }, underline: !item.missing };
+            docCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF6B5330' } };
             docCell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
             docCell.border = border;
           }
@@ -4867,7 +5001,7 @@ export class ReimburseBoard {
         }
       }
       const extra = embedded && attachmentData
-        ? ` · ${attachmentData.imageCount} 张图片凭证已嵌入附件列，点击可查看预览`
+        ? ` · ${attachmentData.imageCount} 张图片、${attachmentData.docCount} 个文档附件已嵌入${attachmentData.missingCount ? `，${attachmentData.missingCount} 个未能取回` : ''}`
         : '';
       this.toast('Excel 已导出', `${stats.count} 笔 · ${sheetCount} 个工作表${extra}。`, 'ok');
       if (fromReport) this.closeReport();

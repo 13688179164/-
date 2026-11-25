@@ -1116,6 +1116,32 @@ body.is-reimburse-drag .rb-card { cursor: grabbing; }
 .rb-preview-content img { max-width: 100%; max-height: 76vh; border-radius: 4px; }
 .rb-preview-modal { z-index: 60; }
 .rb-preview-content iframe { width: 100%; height: min(76vh, 900px); border: 0; border-radius: 4px; background: #fff; }
+.rb-preview-doc {
+  width: min(420px, 82vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 38px 28px 32px;
+  border: 1px solid rgba(143, 187, 232, 0.22);
+  border-radius: 9px;
+  background: linear-gradient(165deg, rgba(14, 22, 36, 0.98), rgba(8, 13, 22, 0.99));
+  text-align: center;
+}
+.rb-preview-doc-icon {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(216, 180, 119, 0.28);
+  border-radius: 10px;
+  background: rgba(216, 180, 119, 0.07);
+  color: var(--rb-gold);
+}
+.rb-preview-doc-icon svg { width: 27px; height: 27px; }
+.rb-preview-doc h3 { margin: 0; font: 500 13px/1.6 var(--rb-sans); color: #e7edf5; word-break: break-all; }
+.rb-preview-doc p { margin: 0; max-width: 36ch; font: 9px/1.9 var(--rb-sans); color: var(--rb-muted-2); }
+.rb-preview-doc .rb-btn { margin-top: 4px; }
 
 .rb-files-modal { z-index: 46; }
 .rb-files-sheet {
