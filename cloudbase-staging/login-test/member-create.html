@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>成员建单测试</title><style>pre{white-space:pre-wrap;font-size:13px}</style></head><body><pre id="o">...</pre>
+<script type="module">
+import cloudbase from './vendor/cloudbase-v3.esm.js';
+const app=cloudbase.init({env:'ready-puma-d4gmuy5yeca0a8f3c'});const auth=app.auth();const o=document.getElementById('o');
+const log=(x)=>o.textContent=JSON.stringify(x,null,2);
+try{
+ await auth.signInWithUsernameAndPassword('ganwenkang0001','Ganwenkang0001');
+ const p=await app.callFunction({name:'api',data:{action:'profile'}});
+ const c=await app.callFunction({name:'api',data:{action:'create',clientId:'GW-RB-mtest001',amount:55,department:'维保',category:'配件',appliedAt:new Date().toISOString(),content:'成员建单隔离测试',hasInvoice:false}});
+ const s=c.result?.ok?await app.callFunction({name:'api',data:{action:'submit',taskId:c.result.task.id}}):null;
+ const l=await app.callFunction({name:'api',data:{action:'list'}});
+ log({profile:p.result, create:c.result, submit:s?.result, listCount:l.result?.tasks?.length, amounts:l.result?.tasks?.map(t=>t.amount), statuses:l.result?.tasks?.map(t=>t.status)});
+}catch(e){log({error:String(e),message:e?.message,code:e?.code})}
+</script></body></html>
