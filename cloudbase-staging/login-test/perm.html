@@ -1,0 +1,28 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>权限测试</title>
+<style>body{font-family:system-ui;max-width:640px;margin:30px auto;padding:0 18px}button{padding:10px 14px;font-size:15px}pre{background:#f5f5f8;padding:12px;white-space:pre-wrap;font-size:12px}</style></head>
+<body><h2>成员越权测试</h2><button id="run">以成员身份测试</button><pre id="out">等待…</pre>
+<script type="module">
+import cloudbase from './vendor/cloudbase-v3.esm.js';
+const app = cloudbase.init({ env: 'ready-puma-d4gmuy5yeca0a8f3c' });
+const auth = app.auth();
+const out = document.getElementById('out');
+document.getElementById('run').onclick = async () => {
+  const call = async (action, data) => {
+    const r = await app.callFunction({ name: 'api', data: { action, ...data } });
+    return r.result;
+  };
+  try {
+    await auth.signInWithUsernameAndPassword('test_member', 'Member260308');
+    const results = {};
+    results.list = await call('list', {});
+    results.review = await call('review', { taskId: 'GW-RB-wcgr1zje', decision: 'approve', note: '越权测试' });
+    results.reassign = await call('reassign', { taskId: 'GW-RB-wcgr1zje', username: 'test_member' });
+    out.textContent = JSON.stringify({
+      listCount: results.list.tasks?.length,
+      listApplicants: results.list.tasks?.map(t => t.applicant),
+      review: results.review,
+      reassign: results.reassign,
+    }, null, 2);
+  } catch (e) { out.textContent = JSON.stringify({ error: String(e), message: e?.message }); }
+};
+</script></body></html>

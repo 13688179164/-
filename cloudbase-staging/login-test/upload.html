@@ -1,0 +1,31 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>附件上传测试</title>
+<style>body{font-family:system-ui;max-width:620px;margin:30px auto;padding:0 18px}button{padding:10px 14px;font-size:15px}pre{background:#f5f5f8;padding:12px;white-space:pre-wrap;font-size:12px}</style></head>
+<body><h2>附件上传测试</h2><button id="run">登录并测试上传</button><pre id="out">等待…</pre>
+<script type="module">
+import cloudbase from './vendor/cloudbase-v3.esm.js';
+const app = cloudbase.init({ env: 'ready-puma-d4gmuy5yeca0a8f3c' });
+const auth = app.auth();
+const out = document.getElementById('out');
+const show = (o) => { out.textContent = typeof o === 'string' ? o : JSON.stringify(o, null, 2); };
+const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=';
+document.getElementById('run').onclick = async () => {
+  try {
+    show('登录中…');
+    await auth.signInWithUsernameAndPassword('1258046614', 'Gdwk260308');
+    const created = await app.callFunction({ name: 'api', data: { action: 'create', amount: 1, department: '维保', category: '其他', content: '附件上传测试', hasInvoice: false } });
+    if (!created.result?.ok) return show({ step: 'create', result: created.result });
+    const taskId = created.result.task.id;
+    const blob = await (await fetch(png)).blob();
+    const path = `attachments/1258046614/${taskId}/test.png`;
+    const up = await app.storage.from('tasks').upload(path, blob);
+    show({ step: 'upload', up });
+    const fileID = `cos:tasks/${path}`;
+    const att = await app.callFunction({ name: 'api', data: { action: 'attach', taskId, name: 'test.png', size: blob.size, mime: 'image/png', fileID } });
+    show({ step: 'attach', att: att.result });
+    if (att.result?.ok) {
+      const sub = await app.callFunction({ name: 'api', data: { action: 'submit', taskId } });
+      show({ step: 'submit', sub: sub.result });
+    }
+  } catch (e) { show({ error: String(e), message: e?.message, code: e?.code }); }
+};
+</script></body></html>
