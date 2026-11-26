@@ -171,11 +171,24 @@ exports.main = async (event) => {
 
     if (action === 'remove') {
       const id = text(event.taskId, 60);
+      if (!id) return fail('VALIDATION', '缺少任务 ID');
+      // 管理员可删除任意状态的记录；成员只能删除自己的草稿
+      if (user.role === 'admin') {
+        const rows = await q(
+          'delete from goodwork_tasks where id=$1 returning id, status, applicant_uid',
+          [id]
+        );
+        if (!rows.length) return fail('INVALID_STATE', '记录不存在或已被删除');
+        await q('delete from goodwork_attachments where task_id=$1', [id]);
+        await audit(user, 'remove', id, rows[0].status, null, { byAdmin: true });
+        return { ok: true, removed: rows[0] };
+      }
       const rows = await q(
         `delete from goodwork_tasks where id=$1 and applicant_uid=$2 and status='draft' returning id`,
         [id, user.auth_uid]
       );
       if (!rows.length) return fail('INVALID_STATE', '只能删除自己的草稿');
+      await q('delete from goodwork_attachments where task_id=$1', [id]);
       await audit(user, 'remove', id, 'draft', null, {});
       return { ok: true };
     }

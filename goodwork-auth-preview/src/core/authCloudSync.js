@@ -400,6 +400,12 @@ export class AuthCloudSync {
     await this.pullNow({ silent: false });
   }
 
+  // 管理员删除任意状态的报销记录（成员走 removeDraft / cancelTask）
+  async deleteTask(taskId) {
+    await this.api('remove', { taskId });
+    await this.pullNow({ silent: false });
+  }
+
   async syncTaskAttachments(task) {
     if (!this.connected || !this._remote.has(task.id)) return;
     await this.uploadTaskAttachments(task);

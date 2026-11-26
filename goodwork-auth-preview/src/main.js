@@ -23,9 +23,9 @@ import { InteractionSystem } from './systems/interaction.js?v=20261123v93';
 import { QuestSystem } from './systems/quest.js?v=20261123v93';
 import { AudioEngine } from './audio.js?v=20261123v93';
 import { UI } from './ui/ui.js?v=20261123v93';
-import { ReimburseBoard } from './ui/reimburse.js?v=20261127v8';
+import { ReimburseBoard } from './ui/reimburse.js?v=20261127v9';
 import { CloudSync } from './core/cloudSync.js?v=20261125v935';
-import { AuthCloudSync } from './core/authCloudSync.js?v=20261127v5';
+import { AuthCloudSync } from './core/authCloudSync.js?v=20261127v6';
 
 // 🛠️ 在任何 UI 初始化之前，先建立一个独立的 CloudSync 单例
 // 这样即使 ReimburseBoard 或 WebGL 有问题，云端同步也能工作

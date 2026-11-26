@@ -2,7 +2,7 @@ import cloudbase from '../../vendor/cloudbase-v3.esm.js';
 import { resolveEnv } from '../core/env.js?v=20261127v1';
 
 const ENV = resolveEnv();
-const BUILD = 'v12';
+const BUILD = 'v13';
 window.__GW_BUILD__ = BUILD;
 const app = cloudbase.init({ env: ENV });
 const auth = app.auth();
@@ -75,7 +75,7 @@ async function boot() {
 
   const enter = async () => {
     gate.remove();
-    await import('../main.js?v=20261127v10');
+    await import('../main.js?v=20261127v11');
     const who = window.__AUTH_USER__ || {};
     const chip = document.createElement('div');
     chip.className = 'gw-user-chip';

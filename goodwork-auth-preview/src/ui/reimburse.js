@@ -2166,7 +2166,10 @@ export class ReimburseBoard {
     const task = this.tasks.find((t) => t.id === id);
     if (!task) return;
     this.confirmId = id;
-    this.el.confirmText.innerHTML = `将删除 <b>${esc(task.applicant)}</b> · ${esc(task.department)} · <b>¥${money(task.amount)}</b> 的本地记录。已写入 D 盘凭证文件夹的文件不会被自动删除。`;
+    const isAdmin = !!(window.__AUTH_USER__ && window.__AUTH_USER__.role === 'admin');
+    this.el.confirmText.innerHTML = isAdmin
+      ? `将永久删除 <b>${esc(task.applicant)}</b> · ${esc(task.department)} · <b>¥${money(task.amount)}</b> 的报销记录：云端数据与附件登记会一并删除，不可恢复。`
+      : `将删除 <b>${esc(task.applicant)}</b> · ${esc(task.department)} · <b>¥${money(task.amount)}</b> 的本地记录。已写入 D 盘凭证文件夹的文件不会被自动删除。`;
     this.el.confirm.classList.add('is-open');
     this.el.confirm.setAttribute('aria-hidden', 'false');
   }
@@ -2182,10 +2185,25 @@ export class ReimburseBoard {
     if (!id) return;
     const task = this.tasks.find((t) => t.id === id);
     if (task && window.__AUTH_USER__) {
+      const isAdmin = window.__AUTH_USER__.role === 'admin';
       try {
-        if (task.serverStatus === 'draft') await this.cloud.removeDraft(id);
-        else if (task.serverStatus === 'submitted') await this.cloud.cancelTask(id);
-        else { this.toast('不能删除', '已审批或已报销的记录不能删除。', 'error'); this.closeConfirm(true); return; }
+        if (isAdmin) {
+          await this.cloud.deleteTask(id);
+          const beforeProc = this.processedEvents.length;
+          this.processedEvents = this.processedEvents.filter((e) => e.taskId !== id);
+          if (this.processedEvents.length !== beforeProc) this.persistProcessed();
+          this.closeConfirm(true);
+          this.renderAll({ animate: false });
+          this.toast('已删除', `${task.applicant} · ¥${money(task.amount)} 已从云端删除`, 'ok');
+        } else if (task.serverStatus === 'draft') {
+          await this.cloud.removeDraft(id);
+        } else if (task.serverStatus === 'submitted') {
+          await this.cloud.cancelTask(id);
+        } else {
+          this.toast('不能删除', '已审批或已报销的记录不能删除。', 'error');
+          this.closeConfirm(true);
+          return;
+        }
         this.closeConfirm(true);
         this.renderAll({ animate: false });
       } catch (e) {
