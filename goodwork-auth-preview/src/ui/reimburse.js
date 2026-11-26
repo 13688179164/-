@@ -4,7 +4,7 @@
  */
 import {
   DEPARTMENTS, DEPT_CATEGORIES, STATUS_LIST, STATUS_MAP,
-  EMPLOYEE_NAMES, ATTACHMENT_ACCEPT, categoriesFor, isHighValuePart, highValueText,
+  EMPLOYEE_NAMES, categoriesFor, isHighValuePart, highValueText,
   BUSINESS_UNITS, MONTHLY_COST_ROWS, mapCostToStatement,
 } from '../core/reimburseConfig.js?v=20261124v923';
 import { CloudSync } from '../core/cloudSync.js?v=20261125v935';
@@ -1117,6 +1117,17 @@ export class ReimburseBoard {
         e.target.value = '';
       }
     });
+    // 点击反馈：便于确认移动端是否成功唤起了系统文件选择器
+    this.el.form.addEventListener('click', (e) => {
+      if (e.target?.id !== 'rbFileInput') return;
+      const hint = $('#rbFileHint', this.el.form);
+      if (!hint) return;
+      hint.textContent = '正在打开文件选择…';
+      clearTimeout(this._fileHintTimer);
+      this._fileHintTimer = setTimeout(() => {
+        hint.textContent = '支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多次添加';
+      }, 5000);
+    });
     const drop = this.el.drawerBody;
     drop.addEventListener('dragover', (e) => {
       if (!e.target.closest('.rb-drop')) return;
@@ -1807,13 +1818,14 @@ export class ReimburseBoard {
 
       <div class="rb-section-label"><span>03</span><h4>附件 / VOUCHERS</h4></div>
       <div class="rb-drop-wrap">
-        <input type="file" id="rbFileInput" class="rb-file-input" multiple accept="${ATTACHMENT_ACCEPT}" aria-label="上传报销附件" />
-        <div class="rb-drop" data-rb="add-files">
+        <input type="file" id="rbFileInput" class="rb-file-input" aria-label="上传报销附件" />
+        <label class="rb-drop" for="rbFileInput" data-rb="add-files">
           <span class="rb-drop-icon">${ICON.drop}</span>
-          <div><b>点击上传图片或文档</b><span>支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多选</span></div>
+          <div><b>点击上传图片或文档</b><span id="rbFileHint">支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多次添加</span></div>
           <em>${ICON.paperclip}</em>
-        </div>
+        </label>
       </div>
+      ${/MicroMessenger/i.test(navigator.userAgent) ? '<div class="rb-folder-note">若微信内点击无反应，请点右上角「···」选择“在浏览器中打开”后再上传。</div>' : ''}
       <div class="rb-attachment-list" id="rbAttachList"></div>
       <div class="rb-folder-note" id="rbFolderNote">附件会保存在本机；绑定 D:\\${VOUCHER_FOLDER} 后自动写入。</div>
 
