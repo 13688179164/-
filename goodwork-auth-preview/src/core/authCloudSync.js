@@ -3,10 +3,9 @@
  * 与 CloudSync 保持相同的外部接口，供 ReimburseBoard / main.js 直接替换。
  */
 import cloudbase from '../../vendor/cloudbase-v3.esm.js';
+import { resolveEnv } from './env.js?v=20261127v1';
 
-const ENV = /^(37l9gib3n8sziipttw9)/.test(location.hostname)
-  ? 'attractive-starfish-d0bp2e865971'
-  : 'ready-puma-d4gmuy5yeca0a8f3c';
+const ENV = resolveEnv();
 const LS_TASKS = 'goodwork.reimburse.tasks.v3';
 const LS_PROCESSED = 'goodwork.reimburse.processed.v1';
 const POLL_MS = 15000;
