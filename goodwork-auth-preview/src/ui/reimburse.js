@@ -1106,11 +1106,6 @@ export class ReimburseBoard {
         this.setDraftToggle(toggle.dataset.toggleField, toggle.dataset.toggleValue === 'true');
         return;
       }
-      if (e.target.closest('[data-rb="add-files"]')) {
-        e.preventDefault();
-        $('#rbFileInput', this.el.form)?.click();
-        return;
-      }
       if (e.target.closest('[data-rb="drawer-close"]')) {
         e.preventDefault();
         this.closeDrawer();
@@ -1811,11 +1806,13 @@ export class ReimburseBoard {
       </div>
 
       <div class="rb-section-label"><span>03</span><h4>附件 / VOUCHERS</h4></div>
-      <input type="file" id="rbFileInput" hidden multiple accept="${ATTACHMENT_ACCEPT}" />
-      <div class="rb-drop" data-rb="add-files" role="button" tabindex="0">
-        <span class="rb-drop-icon">${ICON.drop}</span>
-        <div><b>点击上传图片或文档</b><span>支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多选</span></div>
-        <em>${ICON.paperclip}</em>
+      <div class="rb-drop-wrap">
+        <input type="file" id="rbFileInput" class="rb-file-input" multiple accept="${ATTACHMENT_ACCEPT}" aria-label="上传报销附件" />
+        <div class="rb-drop" data-rb="add-files">
+          <span class="rb-drop-icon">${ICON.drop}</span>
+          <div><b>点击上传图片或文档</b><span>支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多选</span></div>
+          <em>${ICON.paperclip}</em>
+        </div>
       </div>
       <div class="rb-attachment-list" id="rbAttachList"></div>
       <div class="rb-folder-note" id="rbFolderNote">附件会保存在本机；绑定 D:\\${VOUCHER_FOLDER} 后自动写入。</div>
