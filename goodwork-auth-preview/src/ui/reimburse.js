@@ -1106,6 +1106,21 @@ export class ReimburseBoard {
         this.setDraftToggle(toggle.dataset.toggleField, toggle.dataset.toggleValue === 'true');
         return;
       }
+      // 附件上传：多点触达兜底
+      // 1) 点击透明覆盖的 input 时由浏览器原生打开（不要 preventDefault）
+      // 2) 若点击落在拖拽区（部分 WebView 命中异常），主动触发 input.click()
+      if (e.target.id === 'rbFileInput') {
+        this.onFilePickStart();
+        return;
+      }
+      if (e.target.closest('[data-rb="add-files"]')) {
+        const input = $('#rbFileInput', this.el.form);
+        if (input) {
+          this.onFilePickStart();
+          input.click();
+        }
+        return;
+      }
       if (e.target.closest('[data-rb="drawer-close"]')) {
         e.preventDefault();
         this.closeDrawer();
@@ -1116,17 +1131,6 @@ export class ReimburseBoard {
         this.addFiles(e.target.files);
         e.target.value = '';
       }
-    });
-    // 点击反馈：便于确认移动端是否成功唤起了系统文件选择器
-    this.el.form.addEventListener('click', (e) => {
-      if (e.target?.id !== 'rbFileInput') return;
-      const hint = $('#rbFileHint', this.el.form);
-      if (!hint) return;
-      hint.textContent = '正在打开文件选择…';
-      clearTimeout(this._fileHintTimer);
-      this._fileHintTimer = setTimeout(() => {
-        hint.textContent = '支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多次添加';
-      }, 5000);
     });
     const drop = this.el.drawerBody;
     drop.addEventListener('dragover', (e) => {
@@ -1817,13 +1821,13 @@ export class ReimburseBoard {
       </div>
 
       <div class="rb-section-label"><span>03</span><h4>附件 / VOUCHERS</h4></div>
-      <div class="rb-drop-wrap">
+      <div class="rb-drop-wrap" id="rbDropWrap">
         <input type="file" id="rbFileInput" class="rb-file-input" aria-label="上传报销附件" />
-        <label class="rb-drop" for="rbFileInput" data-rb="add-files">
+        <div class="rb-drop" data-rb="add-files">
           <span class="rb-drop-icon">${ICON.drop}</span>
           <div><b>点击上传图片或文档</b><span id="rbFileHint">支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多次添加</span></div>
           <em>${ICON.paperclip}</em>
-        </label>
+        </div>
       </div>
       ${/MicroMessenger/i.test(navigator.userAgent) ? '<div class="rb-folder-note">若微信内点击无反应，请点右上角「···」选择“在浏览器中打开”后再上传。</div>' : ''}
       <div class="rb-attachment-list" id="rbAttachList"></div>
@@ -1891,6 +1895,18 @@ export class ReimburseBoard {
     }
   }
 
+  onFilePickStart() {
+    const hint = $('#rbFileHint', this.el.form);
+    if (hint) {
+      hint.textContent = '正在打开文件选择…（如无反应，请用手机浏览器打开本页）';
+      clearTimeout(this._fileHintTimer);
+      this._fileHintTimer = setTimeout(() => {
+        hint.textContent = '支持 PNG、JPG、WEBP、PDF、DOC、XLS、TXT，可多次添加';
+      }, 6000);
+    }
+    this.toast('正在打开文件选择…', '如果没有弹出选择框，请点右上角「···」用浏览器打开本页。');
+  }
+
   addFiles(fileList) {
     if (!fileList?.length) return;
     const files = [...fileList];
@@ -1911,7 +1927,11 @@ export class ReimburseBoard {
       });
       added++;
     }
-    if (added) this.renderDrawerAttachments();
+    if (added) {
+      this.renderDrawerAttachments();
+      const lastName = files[files.length - 1]?.name || '';
+      this.toast('已添加附件', added === 1 ? lastName : `${added} 个文件`, 'ok');
+    }
   }
 
   renderDrawerAttachments() {

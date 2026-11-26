@@ -1,6 +1,8 @@
 import cloudbase from '../../vendor/cloudbase-v3.esm.js';
 
 const ENV = 'ready-puma-d4gmuy5yeca0a8f3c';
+const BUILD = 'v7';
+window.__GW_BUILD__ = BUILD;
 const app = cloudbase.init({ env: ENV });
 const auth = app.auth();
 
@@ -30,7 +32,7 @@ function injectGate() {
   gate.id = 'gw-auth-gate';
   gate.innerHTML = `
     <div class="gw-card">
-      <div class="gw-brand">GOODWORK FINANCE OS</div>
+      <div class="gw-brand">GOODWORK FINANCE OS · ${BUILD}</div>
       <h1>账号登录</h1>
       <p>请使用管理员开通的用户名和密码进入工作台。</p>
       <label>用户名<input id="gw-user" autocomplete="username" placeholder="请输入用户名"></label>
@@ -50,11 +52,11 @@ async function boot() {
 
   const enter = async () => {
     gate.remove();
-    await import('../main.js?v=20261126v4');
+    await import('../main.js?v=20261127v5');
     const who = window.__AUTH_USER__ || {};
     const bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;right:14px;top:12px;z-index:99998;display:flex;gap:8px;align-items:center;padding:7px 10px;border-radius:999px;background:rgba(10,12,24,.72);border:1px solid rgba(120,130,220,.28);color:#dfe2ff;font:12px/1.2 "Microsoft YaHei",sans-serif;backdrop-filter:blur(8px)';
-    bar.innerHTML = `<span>${who.name || ''} · ${who.role === 'admin' ? '管理员' : '成员'}</span>`;
+    bar.innerHTML = `<span>${who.name || ''} · ${who.role === 'admin' ? '管理员' : '成员'} · ${BUILD}</span>`;
     const out = document.createElement('button');
     out.textContent = '退出';
     out.style.cssText = 'border:0;border-radius:999px;padding:4px 9px;background:rgba(255,255,255,.12);color:#fff;cursor:pointer;font-size:12px';
