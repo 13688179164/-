@@ -4,10 +4,21 @@
  */
 import cloudbase from '../../vendor/cloudbase-v3.esm.js';
 
-const ENV = 'ready-puma-d4gmuy5yeca0a8f3c';
+const ENV = /^(37l9gib3n8sziipttw9)/.test(location.hostname)
+  ? 'attractive-starfish-d0bp2e865971'
+  : 'ready-puma-d4gmuy5yeca0a8f3c';
 const LS_TASKS = 'goodwork.reimburse.tasks.v3';
 const LS_PROCESSED = 'goodwork.reimburse.processed.v1';
 const POLL_MS = 15000;
+
+// datetime-local 的值没有时区，统一按门店本地时间 +08:00 提交，
+// 兼容尚未升级时区解析的云函数版本
+function withStoreOffset(value) {
+  const v = String(value == null ? '' : value).trim();
+  if (!v) return v;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(v)) return v;
+  return /T\d{2}:\d{2}$/.test(v) ? `${v}:00+08:00` : `${v}+08:00`;
+}
 
 const app = cloudbase.init({ env: ENV });
 const auth = app.auth();
@@ -283,7 +294,7 @@ export class AuthCloudSync {
               amount: t.amount,
               department: t.department,
               category: t.category,
-              appliedAt: t.appliedAt,
+              appliedAt: withStoreOffset(t.appliedAt),
               content: t.content,
               hasInvoice: t.hasInvoice,
             });
@@ -321,7 +332,7 @@ export class AuthCloudSync {
           if (changed) {
             await this.api('update', {
               taskId: t.id, amount: t.amount, department: t.department,
-              category: t.category, appliedAt: t.appliedAt, content: t.content,
+              category: t.category, appliedAt: withStoreOffset(t.appliedAt), content: t.content,
               hasInvoice: t.hasInvoice,
             });
           }
