@@ -77,6 +77,8 @@ export class AuthCloudSync {
     this._pushTimer = null;
     this._pollTimer = null;
     this._pushing = false;
+    this._pushQueued = false;
+    this._visBound = false;
     this._initialized = false;
   }
 
@@ -118,6 +120,13 @@ export class AuthCloudSync {
       this.onStatus('connected', { message: '云已连接' });
       await this.pullNow({ silent: true });
       this.startPoll();
+      if (!this._visBound) {
+        this._visBound = true;
+        // 页面从后台切回前台时立即补拉一次，避免管理员长时间看不到成员新提交
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) this.pullNow({ silent: true }).catch(() => {});
+        });
+      }
     } catch (e) {
       this.connected = false;
       this.status = 'error';
@@ -192,7 +201,16 @@ export class AuthCloudSync {
       if (!byTask.has(a.task_id)) byTask.set(a.task_id, []);
       byTask.get(a.task_id).push(a);
     }
-    const tasks = (out.tasks || []).map((t) => this.mapTask(t, byTask.get(t.id)));
+    const serverIds = new Set((out.tasks || []).map((t) => t.id));
+    // 🔧 本地刚保存、还没被任何一次成功推送确认过的记录，不能被云端列表直接覆盖丢失
+    // （否则新建后若推送被并发轮询打断，卡片会消失且再也找不回来）
+    const localOnly = this.getState().tasks.filter(
+      (t) => !this._remote.has(t.id) && !serverIds.has(t.id)
+    );
+    const tasks = [
+      ...localOnly,
+      ...(out.tasks || []).map((t) => this.mapTask(t, byTask.get(t.id))),
+    ].sort((a, b) => (Number(b.order) || 0) - (Number(a.order) || 0));
     this._remote = new Map((out.tasks || []).map((t) => [t.id, t]));
     this.applying = true;
     try {
@@ -206,7 +224,6 @@ export class AuthCloudSync {
   }
 
   markLocalChange() {
-    if (this.applying) return;
     if (this._pushTimer) clearTimeout(this._pushTimer);
     this._pushTimer = setTimeout(() => {
       this.pushNow({ silent: true }).catch((e) => {
@@ -243,7 +260,12 @@ export class AuthCloudSync {
   }
 
   async pushNow({ force = false, silent = true } = {}) {
-    if (!this.connected || this.applying || this._pushing) return false;
+    if (!this.connected) return false;
+    // 🔧 正在推送或正在应用云端状态时不要直接丢弃本次变更，排队等当前任务结束后重试
+    if (this._pushing || this.applying) {
+      this._pushQueued = true;
+      return false;
+    }
     this._pushing = true;
     const state = this.getState();
     const local = state.tasks || [];
@@ -252,17 +274,27 @@ export class AuthCloudSync {
       for (const t of local) {
         const remote = this._remote.get(t.id);
         if (!remote) {
-          await this.api('create', {
-            clientId: t.id,
-            amount: t.amount,
-            department: t.department,
-            category: t.category,
-            appliedAt: t.appliedAt,
-            content: t.content,
-            hasInvoice: t.hasInvoice,
-          });
+          try {
+            await this.api('create', {
+              clientId: t.id,
+              amount: t.amount,
+              department: t.department,
+              category: t.category,
+              appliedAt: t.appliedAt,
+              content: t.content,
+              hasInvoice: t.hasInvoice,
+            });
+          } catch (createErr) {
+            // 上一次推送已创建成功（例如提交阶段失败后重试），不重复报错
+            if (!/duplicate|已存在|23505/i.test(createErr?.message || '')) throw createErr;
+          }
           await this.uploadTaskAttachments(t);
-          await this.api('submit', { taskId: t.id });
+          try {
+            await this.api('submit', { taskId: t.id });
+          } catch (submitErr) {
+            // 已经提交过（并发重试），视为成功
+            if (!/状态|INVALID_STATE/i.test(submitErr?.message || '')) throw submitErr;
+          }
           continue;
         }
         const rs = remote.status;
@@ -291,6 +323,14 @@ export class AuthCloudSync {
             });
           }
           await this.uploadTaskAttachments(t);
+          // 之前提交失败的记录会停留在 draft，这里补交一次
+          if (rs === 'draft') {
+            try {
+              await this.api('submit', { taskId: t.id });
+            } catch (submitErr) {
+              if (!/状态|INVALID_STATE/i.test(submitErr?.message || '')) throw submitErr;
+            }
+          }
         }
       }
       // 本地删除 → 云端撤销/删除草稿
@@ -308,6 +348,10 @@ export class AuthCloudSync {
       throw e;
     } finally {
       this._pushing = false;
+      if (this._pushQueued) {
+        this._pushQueued = false;
+        setTimeout(() => { this.pushNow({ silent: true }).catch(() => {}); }, 300);
+      }
     }
   }
 

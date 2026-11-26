@@ -1684,9 +1684,10 @@ export class ReimburseBoard {
     } else {
       const now = new Date();
       const time = nowTimeValue();
+      const authUser = window.__AUTH_USER__;
       this.draft = {
         id: uid('GW-RB'),
-        applicant: '',
+        applicant: (authUser && authUser.role !== 'admin' && authUser.name) ? authUser.name : '',
         amount: '',
         department: DEPARTMENTS[0],
         category: DEPT_CATEGORIES[DEPARTMENTS[0]][0],
@@ -1734,12 +1735,15 @@ export class ReimburseBoard {
     const catOptions = cats.map((x) => `<option value="${esc(x)}" ${d.category === x ? 'selected' : ''}>${esc(x)}</option>`).join('');
     const statusOptions = STATUS_LIST.map((s) => `<option value="${s.id}" ${d.status === s.id ? 'selected' : ''}>${s.label}</option>`).join('');
     const authLocked = !!window.__AUTH_USER__;
+    const authUser = window.__AUTH_USER__;
+    const memberLocked = !!(authUser && authUser.role !== 'admin');
+    const applicantValue = memberLocked ? (authUser.name || '') : d.applicant;
     const employeeList = [...new Set([...EMPLOYEE_NAMES, ...this.tasks.map((t) => t.applicant)])].filter(Boolean);
     return `
       <div class="rb-form-grid">
         <label class="rb-field">
           <span>报销人员 <em>APPLICANT</em></span>
-          <input id="rbApplicant" name="applicant" value="${esc(d.applicant)}" placeholder="输入姓名" list="rbEmployeeList" autocomplete="off" />
+          <input id="rbApplicant" name="applicant" value="${esc(applicantValue)}" placeholder="输入姓名" list="rbEmployeeList" autocomplete="off" ${memberLocked ? 'readonly' : ''} />
           <datalist id="rbEmployeeList">${employeeList.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist>
         </label>
         <label class="rb-field">
@@ -2056,11 +2060,13 @@ export class ReimburseBoard {
       this.syncProcessed(task, original ? original.status : null);
       this.persistTasks();
       // 🔧 保存后强制立即上云，不等 debounce
+      let pushError = null;
       try {
         const pushed = await this.cloud?.pushNow({ force: true, silent: true });
-        console.log('[reimburse] pushNow 结果:', pushed ? '✅ 已上云' : '⏳ 未上云 (可能还没连接)');
+        console.log('[reimburse] pushNow 结果:', pushed ? '✅ 已上云' : '⏳ 排队重试');
       } catch (pushErr) {
-        console.warn('[reimburse] pushNow 异常（不影响本地保存）:', pushErr?.message);
+        pushError = pushErr;
+        console.warn('[reimburse] pushNow 异常（本地已保存，稍后自动重试）:', pushErr?.message);
       }
       this.viewDate = dateKeyOf(task.appliedAt);
       this.filterStart = this.viewDate;
@@ -2072,15 +2078,19 @@ export class ReimburseBoard {
         this.cloud.syncTaskAttachments(task).catch((err) => console.warn('附件云同步失败', err));
       }
       const localOnly = task.attachments.length > 0 && this.folderStatus !== 'connected';
+      const statusText = (!isEditing && window.__AUTH_USER__) ? '待审批' : STATUS_LABEL[task.status];
       this.toast(
         isEditing ? '报销申请已更新' : '报销申请已创建',
         localOnly
           ? '附件已本地暂存；绑定凭证文件夹后可自动写入 D 盘。'
           : writeFailures
             ? `${applicant} · ¥${money(task.amount)}，${writeFailures} 个附件写入 D 盘失败，已保留本地缓存。`
-            : `${applicant} · ¥${money(task.amount)} · ${STATUS_LABEL[task.status]}`,
+            : `${applicant} · ¥${money(task.amount)} · ${statusText}`,
         'ok'
       );
+      if (pushError) {
+        this.toast('云端提交未完成', `记录已保存在本机，将自动重试：${pushError.message || pushError}`, 'warn');
+      }
     } catch (err2) {
       console.error(err2);
       this.toast('保存失败', err2?.message || '浏览器本地存储不可用。');

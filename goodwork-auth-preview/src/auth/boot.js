@@ -50,7 +50,7 @@ async function boot() {
 
   const enter = async () => {
     gate.remove();
-    await import('../main.js?v=20261126v1');
+    await import('../main.js?v=20261126v2');
     const who = window.__AUTH_USER__ || {};
     const bar = document.createElement('div');
     bar.style.cssText = 'position:fixed;right:14px;top:12px;z-index:99998;display:flex;gap:8px;align-items:center;padding:7px 10px;border-radius:999px;background:rgba(10,12,24,.72);border:1px solid rgba(120,130,220,.28);color:#dfe2ff;font:12px/1.2 "Microsoft YaHei",sans-serif;backdrop-filter:blur(8px)';
