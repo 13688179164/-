@@ -49,6 +49,17 @@ function text(v, max = 500) {
   return String(v == null ? '' : v).trim().slice(0, max);
 }
 
+// 前端传的是 datetime-local 的“墙上时间”（不带时区）。云函数运行在 UTC，
+// 若直接 new Date() 会被当作 UTC 解析，导致 +08 用户晚间填报的日期整体后移一天。
+// 这里统一按门店本地时区（+08:00）解释；带时区的字符串保持原样。
+function appliedAtIso(value) {
+  const s = String(value == null ? '' : value).trim();
+  if (!s) return new Date().toISOString();
+  const hasTz = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(s);
+  const d = new Date(hasTz ? s : `${s}+08:00`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 async function audit(actor, action, targetId, fromStatus, toStatus, detail) {
   await q(
     `insert into goodwork_audit
@@ -122,15 +133,15 @@ exports.main = async (event) => {
       const id = /^GW-RB-[a-z0-9]{6,20}$/i.test(clientId)
         ? clientId
         : `GW-RB-${Math.random().toString(36).slice(2, 10)}`;
-      const appliedAt = event.appliedAt ? new Date(event.appliedAt) : new Date();
-      if (Number.isNaN(appliedAt.getTime())) return fail('VALIDATION', '日期格式不正确');
+      const appliedAt = appliedAtIso(event.appliedAt);
+      if (!appliedAt) return fail('VALIDATION', '日期格式不正确');
       const rows = await q(
         `insert into goodwork_tasks
           (id, applicant, amount, department, category, applied_at, content, status,
            has_invoice, applicant_uid, writer_device_id, created_at, updated_at)
          values ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10,now(),now())
          returning id, status, amount, applied_at`,
-        [id, user.name, amount, department, category, appliedAt.toISOString(), content,
+        [id, user.name, amount, department, category, appliedAt, content,
           !!event.hasInvoice, user.auth_uid, 'web']
       );
       await audit(user, 'create', id, null, 'draft', { amount, category });
@@ -141,6 +152,8 @@ exports.main = async (event) => {
       const id = text(event.taskId, 60);
       const amount = num(event.amount);
       if (!id || !(amount > 0)) return fail('VALIDATION', '参数不正确');
+      const appliedAt = event.appliedAt ? appliedAtIso(event.appliedAt) : new Date().toISOString();
+      if (!appliedAt) return fail('VALIDATION', '日期格式不正确');
       const rows = await q(
         `update goodwork_tasks
          set amount=$1, department=$2, category=$3, content=$4, has_invoice=$5,
@@ -148,7 +161,7 @@ exports.main = async (event) => {
          where id=$7 and applicant_uid=$8 and status in ('draft','submitted')
          returning id, status`,
         [amount, text(event.department, 40), text(event.category, 40), text(event.content, 1000),
-          !!event.hasInvoice, event.appliedAt ? new Date(event.appliedAt).toISOString() : new Date().toISOString(),
+          !!event.hasInvoice, appliedAt,
           id, user.auth_uid]
       );
       if (!rows.length) return fail('INVALID_STATE', '当前状态不允许修改');
