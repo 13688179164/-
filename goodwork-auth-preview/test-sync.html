@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>CloudSync 诊断测试</title>
+<style>
+  body { font-family: -apple-system, sans-serif; padding: 20px; background: #1e1e1e; color: #eee; }
+  h1 { font-size: 18px; }
+  button { padding: 8px 14px; margin: 4px; background: #0052cc; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #0066ff; }
+  button.danger { background: #c0392b; }
+  button.ok { background: #27ae60; }
+  #log { background: #000; color: #0f0; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 12px; max-height: 400px; overflow: auto; white-space: pre-wrap; }
+  #status { padding: 8px; margin: 8px 0; border-radius: 4px; background: #333; }
+  #status.connected { background: #1a4d1a; color: #6f6; }
+  #status.error { background: #4d1a1a; color: #f66; }
+  #status.syncing { background: #4d3a1a; color: #ff6; }
+  .row { margin: 8px 0; }
+  input, select { padding: 6px; margin: 4px; border-radius: 3px; border: 1px solid #555; background: #2a2a2a; color: #eee; }
+</style>
+</head>
+<body>
+<h1>🔧 CloudSync 诊断测试页 (v9.1)</h1>
+
+<div id="status">准备中...</div>
+
+<div class="row">
+  <button onclick="runInit()">① init (自动连接)</button>
+  <button onclick="runConnect()" class="ok">② connect 手动连接</button>
+  <button onclick="runTestPostgrest()">③ 直接测 PostgREST</button>
+</div>
+
+<div class="row">
+  <button onclick="runSaveTask()">④ 模拟保存报销 → pushNow</button>
+  <button onclick="runPull()" class="ok">⑤ connectData('pull') 强制拉取</button>
+  <button onclick="runMerge()">⑥ connectData('auto') 智能合并</button>
+</div>
+
+<div class="row">
+  <button onclick="runCleanLocal()" class="danger">清空 localStorage (本地数据)</button>
+  <button onclick="runCleanCloud()" class="danger">清空云端所有数据 ⚠️</button>
+  <button onclick="toggleDebug()">开关 debug 日志</button>
+</div>
+
+<div id="log">等待操作...\n</div>
+
+<script type="module">
+import { CloudSync } from './src/core/cloudSync.js';
+
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+
+function log(msg) {
+  const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.textContent += line + '\n';
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log('[DIAG]', msg);
+}
+
+function setStatus(s, cls = '') {
+  statusEl.textContent = s;
+  statusEl.className = cls;
+}
+
+// 模拟本地 state（reimburse.js 的格式）
+const localState = {
+  tasks: [
+    {
+      id: 'TEST-TASK-1',
+      applicant: '测试用户',
+      amount: 88.88,
+      department: 'IT',
+      category: '测试',
+      appliedAt: '2026-11-23',
+      content: '诊断测试报销',
+      status: 'pending',
+      hasInvoice: false,
+      invoiceReceived: false,
+      invoiceReceivedAt: null,
+      reimbursedAt: null,
+      reimbursedFrom: null,
+      highValuePart: null,
+      crossMonth: null,
+      stockingCost: null,
+      attachments: [],
+      order: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ],
+  processedEvents: [],
+};
+
+// 创建 CloudSync 实例
+window.__cloudSync = new CloudSync({
+  getState: () => localState,
+  applyState: (newState, { source, silent }) => {
+    log(`📥 applyState: source=${source || '?'} tasks=${newState.tasks?.length} proc=${newState.processedEvents?.length} silent=${silent}`);
+    localState.tasks = newState.tasks || [];
+    localState.processedEvents = newState.processedEvents || [];
+    log(`   本地 state 已更新，现在 ${localState.tasks.length} 条任务`);
+  },
+  onStatus: (status, detail) => {
+    log(`📡 onStatus: ${status} ${detail.message ? '| ' + detail.message : ''}`);
+    if (status === 'connected') setStatus('✅ 已连接', 'connected');
+    else if (status === 'error') setStatus('❌ 错误: ' + detail.message, 'error');
+    else if (status === 'syncing') setStatus('🔄 同步中...', 'syncing');
+    else if (status === 'need-login') setStatus('🔑 需要连接', '');
+  },
+  onToast: (title, msg, kind) => log(`🍞 toast: ${title} - ${msg} (${kind})`),
+});
+
+window.runInit = async () => {
+  log('\n========== ① init() ==========');
+  try {
+    await window.__cloudSync.init();
+    log('init() 返回');
+    log(`  connected=${window.__cloudSync.isConnected()} dirty=${window.__cloudSync.dirty}`);
+    log(`  status=${JSON.stringify(window.__cloudSync.getStatus())}`);
+  } catch (e) {
+    log(`❌ init 抛异常: ${e.message}`);
+  }
+};
+
+window.runConnect = async () => {
+  log('\n========== ② connect() ==========');
+  try {
+    await window.__cloudSync.connect();
+    log('✅ connect 成功!');
+    log(`  connected=${window.__cloudSync.isConnected()}`);
+  } catch (e) {
+    log(`❌ connect 失败: ${e.message}`);
+  }
+};
+
+window.runTestPostgrest = async () => {
+  log('\n========== ③ 直接测 PostgREST (无 SDK) ==========');
+  try {
+    const r = await window.__pgDebug.testPostgrest();
+    log(`   GET tasks → HTTP ${r.status}`);
+  } catch (e) {
+    log(`❌ 测试失败: ${e.message}`);
+  }
+};
+
+window.runSaveTask = async () => {
+  log('\n========== ④ 模拟保存报销 → pushNow ==========');
+  // 添加一条新的
+  const newId = 'TEST-' + Date.now();
+  localState.tasks.push({
+    id: newId,
+    applicant: '新报销' + Date.now().toString().slice(-4),
+    amount: Math.round(Math.random() * 5000) / 100,
+    department: 'IT', category: '测试',
+    appliedAt: '2026-11-23',
+    content: '测试保存 → pushNow',
+    status: 'pending',
+    hasInvoice: false, invoiceReceived: false,
+    invoiceReceivedAt: null, reimbursedAt: null, reimbursedFrom: null,
+    highValuePart: null, crossMonth: null, stockingCost: null,
+    attachments: [], order: localState.tasks.length + 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  log(`  本地 state 现在 ${localState.tasks.length} 条`);
+  
+  if (!window.__cloudSync.isConnected()) {
+    log('  ⚠️ 还没连接！先 connect() 再 pushNow');
+    try {
+      await window.__cloudSync.connect();
+    } catch (e) {
+      log(`  ❌ connect 失败，pushNow 会跳过: ${e.message}`);
+      return;
+    }
+  }
+  
+  log('  → 调用 pushNow()...');
+  const result = await window.__cloudSync.pushNow({ force: true });
+  log(`  pushNow 返回: ${result ? '✅ 成功' : '❌ 失败'}`);
+  
+  // 验证
+  log('  → 验证云端...');
+  try {
+    const r = await fetch(
+      `https://attractive-starfish-d0bp2e865971.api.tcloudbasegateway.com/v1/rdb/rest/goodwork_tasks?select=id,applicant,amount&limit=10`,
+      { headers: { Authorization: 'Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IjIxMTE1ZTA4LWJjYjQtNGViZS1iMzQ2LTRkMDBhOWUxMWY4NCJ9.eyJpc3MiOiJodHRwczovL2F0dHJhY3RpdmUtc3RhcmZpc2gtZDBicDJlODY1OTcxLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsImV4cCI6NDA5OTEwNDgzOCwiaWF0IjoxNzk1NDIxNjM4LCJub25jZSI6IkM2OXNFOVRWU2E2N09TRmNfbEFBLWciLCJhdF9oYXNoIjoiQzY5c0U5VFZTYTY3T1NGY19sQUEtZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.BbEqc_mku1-zXHvEAI3bUhUyDfjlkPhbyE_gHrUsF2mDuc0FlgskbZ9qziNP9Bk3gW4mWNDetSt7fq70Z6Y3fsypBOZz9MGb5Hgf1Cm1LPZsdXi8Vaw5nDnUnR9wx6YgxhjGYUwI9hYRGMmy7FR4YtRZMQC9wR0VJAda6G1Ac_YF00R1Ptdw_ljUmyB5-W5osDiklvP_XcsbboR4ph9Poo8tCJtpzDkIhvZ9A0ypSfM9HZnqHRpV-X3VJy3fDyeQ6tKZGt6iCbrUuFDqUXBZ8oCCRWAYXKS2gUg5OyGa538Sj6llJDlJxJjEqgz9lfaiWRnYuGTQv78E-5WEkdINuA' } }
+    );
+    const tasks = await r.json();
+    log(`  云端现在 ${tasks.length} 条任务`);
+    tasks.forEach(t => log(`    ${t.id}: ${t.applicant} ¥${t.amount}`));
+  } catch (e) {
+    log(`  ❌ 验证失败: ${e.message}`);
+  }
+};
+
+window.runPull = async () => {
+  log('\n========== ⑤ connectData(pull) ==========');
+  await window.__cloudSync.connectData('pull');
+  log(`  本地 state 现在 ${localState.tasks.length} 条`);
+};
+
+window.runMerge = async () => {
+  log('\n========== ⑥ connectData(auto) 智能合并 ==========');
+  await window.__cloudSync.connectData('auto');
+  log(`  本地 state 现在 ${localState.tasks.length} 条`);
+};
+
+window.runCleanLocal = () => {
+  log('\n========== 清空 localStorage ==========');
+  localStorage.clear();
+  log('  ✅ 已清空');
+};
+
+window.runCleanCloud = async () => {
+  log('\n========== ⚠️ 清空云端所有数据 ==========');
+  if (!confirm('确定要清空云端所有数据吗？')) return;
+  const headers = { Authorization: 'Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6IjIxMTE1ZTA4LWJjYjQtNGViZS1iMzQ2LTRkMDBhOWUxMWY4NCJ9.eyJpc3MiOiJodHRwczovL2F0dHJhY3RpdmUtc3RhcmZpc2gtZDBicDJlODY1OTcxLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsImV4cCI6NDA5OTEwNDgzOCwiaWF0IjoxNzk1NDIxNjM4LCJub25jZSI6IkM2OXNFOVRWU2E2N09TRmNfbEFBLWciLCJhdF9oYXNoIjoiQzY5c0U5VFZTYTY3T1NGY19sQUEtZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJhdHRyYWN0aXZlLXN0YXJmaXNoLWQwYnAyZTg2NTk3MSIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.BbEqc_mku1-zXHvEAI3bUhUyDfjlkPhbyE_gHrUsF2mDuc0FlgskbZ9qziNP9Bk3gW4mWNDetSt7fq70Z6Y3fsypBOZz9MGb5Hgf1Cm1LPZsdXi8Vaw5nDnUnR9wx6YgxhjGYUwI9hYRGMmy7FR4YtRZMQC9wR0VJAda6G1Ac_YF00R1Ptdw_ljUmyB5-W5osDiklvP_XcsbboR4ph9Poo8tCJtpzDkIhvZ9A0ypSfM9HZnqHRpV-X3VJy3fDyeQ6tKZGt6iCbrUuFDqUXBZ8oCCRWAYXKS2gUg5OyGa538Sj6llJDlJxJjEqgz9lfaiWRnYuGTQv78E-5WEkdINuA' };
+  const BASE = 'https://attractive-starfish-d0bp2e865971.api.tcloudbasegateway.com/v1/rdb/rest';
+  for (const t of ['goodwork_attachments', 'goodwork_processed', 'goodwork_tasks']) {
+    const r = await fetch(`${BASE}/${t}`, { method: 'DELETE', headers });
+    log(`  DELETE ${t}: HTTP ${r.status}`);
+  }
+  log('  ✅ 云端已清空');
+};
+
+window.toggleDebug = () => {
+  const cur = localStorage.getItem('goodwork.cloud.debug') === '1';
+  localStorage.setItem('goodwork.cloud.debug', cur ? '0' : '1');
+  log(`  debug 日志: ${cur ? 'OFF' : 'ON'} (刷新后生效)`);
+};
+
+log('诊断测试页已就绪。请按顺序点击按钮测试。');
+setStatus('就绪，请点按钮开始测试', '');
+</script>
+</body>
+</html>

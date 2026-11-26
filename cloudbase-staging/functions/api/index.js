@@ -118,7 +118,10 @@ exports.main = async (event) => {
       const category = text(event.category, 40);
       const content = text(event.content, 1000);
       if (!department || !category) return fail('VALIDATION', '部门与分类不能为空');
-      const id = `GW-RB-${Math.random().toString(36).slice(2, 10)}`;
+      const clientId = text(event.clientId, 40);
+      const id = /^GW-RB-[a-z0-9]{6,20}$/i.test(clientId)
+        ? clientId
+        : `GW-RB-${Math.random().toString(36).slice(2, 10)}`;
       const appliedAt = event.appliedAt ? new Date(event.appliedAt) : new Date();
       if (Number.isNaN(appliedAt.getTime())) return fail('VALIDATION', '日期格式不正确');
       const rows = await q(
@@ -132,6 +135,36 @@ exports.main = async (event) => {
       );
       await audit(user, 'create', id, null, 'draft', { amount, category });
       return { ok: true, task: rows[0] };
+    }
+
+    if (action === 'update') {
+      const id = text(event.taskId, 60);
+      const amount = num(event.amount);
+      if (!id || !(amount > 0)) return fail('VALIDATION', '参数不正确');
+      const rows = await q(
+        `update goodwork_tasks
+         set amount=$1, department=$2, category=$3, content=$4, has_invoice=$5,
+             applied_at=$6, updated_at=now(), version=version+1
+         where id=$7 and applicant_uid=$8 and status in ('draft','submitted')
+         returning id, status`,
+        [amount, text(event.department, 40), text(event.category, 40), text(event.content, 1000),
+          !!event.hasInvoice, event.appliedAt ? new Date(event.appliedAt).toISOString() : new Date().toISOString(),
+          id, user.auth_uid]
+      );
+      if (!rows.length) return fail('INVALID_STATE', '当前状态不允许修改');
+      await audit(user, 'update', id, rows[0].status, rows[0].status, {});
+      return { ok: true, task: rows[0] };
+    }
+
+    if (action === 'remove') {
+      const id = text(event.taskId, 60);
+      const rows = await q(
+        `delete from goodwork_tasks where id=$1 and applicant_uid=$2 and status='draft' returning id`,
+        [id, user.auth_uid]
+      );
+      if (!rows.length) return fail('INVALID_STATE', '只能删除自己的草稿');
+      await audit(user, 'remove', id, 'draft', null, {});
+      return { ok: true };
     }
 
     if (action === 'attach') {
