@@ -1,7 +1,7 @@
 import cloudbase from '../../vendor/cloudbase-v3.esm.js';
 
 const ENV = 'ready-puma-d4gmuy5yeca0a8f3c';
-const BUILD = 'v8';
+const BUILD = 'v9';
 window.__GW_BUILD__ = BUILD;
 const app = cloudbase.init({ env: ENV });
 const auth = app.auth();
