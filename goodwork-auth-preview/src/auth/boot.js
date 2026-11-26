@@ -2,7 +2,7 @@ import cloudbase from '../../vendor/cloudbase-v3.esm.js';
 import { resolveEnv } from '../core/env.js?v=20261127v1';
 
 const ENV = resolveEnv();
-const BUILD = 'v11';
+const BUILD = 'v12';
 window.__GW_BUILD__ = BUILD;
 const app = cloudbase.init({ env: ENV });
 const auth = app.auth();
@@ -27,6 +27,28 @@ function injectGate() {
     #gw-auth-gate button:disabled{opacity:.55;cursor:not-allowed;}
     #gw-auth-gate .gw-msg{min-height:18px;margin:10px 0 0;font-size:12px;color:#ff8f8f;}
     #gw-auth-gate .gw-brand{font-size:11px;letter-spacing:2px;color:#7d84ff;margin-bottom:14px;}
+    /* 账号入口：嵌入工作台顶栏，不再悬浮遮挡按钮 */
+    .gw-user-chip{position:relative;display:inline-flex;align-items:center;z-index:60;}
+    .gw-user-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 12px;
+      border-radius:100px;border:1px solid rgba(120,130,220,.28);background:rgba(10,12,24,.72);color:#dfe2ff;
+      font:11px/1 -apple-system,"Microsoft YaHei","PingFang SC",sans-serif;cursor:pointer;backdrop-filter:blur(8px);white-space:nowrap;}
+    .gw-user-btn i{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#5b5bff,#8b5cf6);
+      display:grid;place-items:center;font-style:normal;font-size:11px;color:#fff;}
+    .gw-user-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:160px;padding:10px 12px;border-radius:10px;
+      background:rgba(12,15,30,.97);border:1px solid rgba(120,130,220,.3);box-shadow:0 12px 30px rgba(0,0,0,.5);
+      color:#e8eaff;z-index:70;display:flex;flex-direction:column;gap:5px;}
+    .gw-user-menu[hidden]{display:none;}
+    .gw-user-menu b{font-size:12px;font-weight:500;}
+    .gw-user-menu em{font-style:normal;font-size:10px;color:#9aa0c8;}
+    .gw-user-out{margin-top:4px;border:0;border-radius:8px;padding:7px 10px;background:rgba(255,255,255,.1);
+      color:#fff;font-size:11px;cursor:pointer;}
+    @media (max-width:700px){
+      .gw-user-btn{width:34px;padding:0;}
+      .gw-user-btn span{display:none;}
+      .gw-user-btn i{width:26px;height:26px;}
+      /* 手机端隐藏旧的左下角云同步浮窗，避免遮挡导出区域 */
+      #__csStatus{display:none !important;}
+    }
   `;
   document.head.appendChild(style);
   const gate = document.createElement('div');
@@ -53,17 +75,31 @@ async function boot() {
 
   const enter = async () => {
     gate.remove();
-    await import('../main.js?v=20261127v9');
+    await import('../main.js?v=20261127v10');
     const who = window.__AUTH_USER__ || {};
-    const bar = document.createElement('div');
-    bar.style.cssText = 'position:fixed;right:14px;top:12px;z-index:99998;display:flex;gap:8px;align-items:center;padding:7px 10px;border-radius:999px;background:rgba(10,12,24,.72);border:1px solid rgba(120,130,220,.28);color:#dfe2ff;font:12px/1.2 "Microsoft YaHei",sans-serif;backdrop-filter:blur(8px)';
-    bar.innerHTML = `<span>${who.name || ''} · ${who.role === 'admin' ? '管理员' : '成员'} · ${BUILD}</span>`;
-    const out = document.createElement('button');
-    out.textContent = '退出';
-    out.style.cssText = 'border:0;border-radius:999px;padding:4px 9px;background:rgba(255,255,255,.12);color:#fff;cursor:pointer;font-size:12px';
-    out.onclick = async () => { try { await auth.signOut(); } catch (_) {} location.reload(); };
-    bar.appendChild(out);
-    document.body.appendChild(bar);
+    const chip = document.createElement('div');
+    chip.className = 'gw-user-chip';
+    chip.innerHTML = `
+      <button type="button" class="gw-user-btn" aria-haspopup="true" aria-label="账号信息">
+        <i>${(who.name || '?').slice(0, 1)}</i><span>${who.name || ''} · ${who.role === 'admin' ? '管理员' : '成员'}</span>
+      </button>
+      <div class="gw-user-menu" hidden>
+        <b>${who.name || ''}</b>
+        <em>${who.role === 'admin' ? '管理员' : '成员'} · ${BUILD}</em>
+        <button type="button" class="gw-user-out">退出登录</button>
+      </div>`;
+    const chipBtn = chip.querySelector('.gw-user-btn');
+    const menu = chip.querySelector('.gw-user-menu');
+    chipBtn.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; };
+    chip.querySelector('.gw-user-out').onclick = async () => { try { await auth.signOut(); } catch (_) {} location.reload(); };
+    document.addEventListener('click', () => { menu.hidden = true; });
+    // 账号入口挂到工作台顶栏，随布局排布，不再悬浮遮挡“新增报销”
+    const mountChip = () => {
+      const actions = document.querySelector('.rb-top-actions');
+      if (actions) { actions.appendChild(chip); return; }
+      setTimeout(mountChip, 400);
+    };
+    mountChip();
   };
 
   const profile = async () => {
