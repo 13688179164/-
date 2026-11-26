@@ -55,3 +55,17 @@
 - 生产部署基线：`dep_6b06ee6d56f981ec16f5df9b`
 - 代码标签：`v935-stable`
 - staging 可随时删除或重建，不影响生产。
+
+## 生产端准备（2026-11-26）
+- 已创建生产管理员：`1258046614`（uid 同上，角色 admin，临时密码与 staging 相同）
+- 已部署生产云函数 `api`，环境变量指向生产 PostgreSQL；未登录调用返回 UNAUTHENTICATED
+- 已加生产表：goodwork_users / goodwork_audit / tasks 审批字段 / attachments 归属字段
+- 历史 4 笔记录已归属到管理员，标记 legacy_unclaimed，等待逐条认领
+- **状态暂未迁移**：仍保持 pending / reimbursed，确保旧版界面可见；切换日再统一 pending→approved
+- 生产前端仍为 v935，未切换；旧版冒烟测试通过（3 笔待报销 + 1 笔已报销）
+- 生产匿名登录仍开启（旧版依赖），切换完成后再关闭
+
+## 切生产注意
+1. 必须先冻结旧版写入，再执行状态迁移，否则旧版新建的 pending 会被误判。
+2. 迁移顺序：备份 → 冻结 → pending/supplemented→approved → 部署新前端 → 验收 → 关闭匿名登录。
+3. 回滚时把 approved 改回 pending，旧版才能重新显示。

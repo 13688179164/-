@@ -1,0 +1,42 @@
+[
+  {
+    "id": "att-2e95cd2c",
+    "task_id": "GW-RB-34cbf4de",
+    "name": "金顶.jpg",
+    "size": 1617137,
+    "mime_type": "image/jpeg",
+    "cloud_file_id": "cos:tasks/attachments/att-2e95cd2c-v7vhqb.jpg",
+    "blob_hash": "",
+    "created_at": "2026-11-25T22:25:09.364658+08:00"
+  },
+  {
+    "id": "att-a7568d6b",
+    "task_id": "GW-RB-480ecea8",
+    "name": "d2ff84bfbddc1464155cad090d72d54d.jpg",
+    "size": 211648,
+    "mime_type": "image/jpeg",
+    "cloud_file_id": "cos:tasks/attachments/att-a7568d6b-y7jk1e.jpg",
+    "blob_hash": "",
+    "created_at": "2026-11-26T16:33:20.068592+08:00"
+  },
+  {
+    "id": "att-f6646b14",
+    "task_id": "GW-RB-573a0a62",
+    "name": "8512e33546fe6b01542429904f8e920d.jpg",
+    "size": 198633,
+    "mime_type": "image/jpeg",
+    "cloud_file_id": "cos:tasks/attachments/att-f6646b14-x1xajm.jpeg",
+    "blob_hash": "",
+    "created_at": "2026-11-25T16:09:17.445167+08:00"
+  },
+  {
+    "id": "att-fd7d3762",
+    "task_id": "GW-RB-ed38e416",
+    "name": "fc80b2ebf0f74585ce5ce0f243a7c7bd.jpg",
+    "size": 183501,
+    "mime_type": "image/jpeg",
+    "cloud_file_id": "cos:tasks/attachments/att-fd7d3762-0wfkwf.jpg",
+    "blob_hash": "",
+    "created_at": "2026-11-25T17:30:52.583876+08:00"
+  }
+]
