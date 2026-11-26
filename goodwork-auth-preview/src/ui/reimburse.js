@@ -3672,7 +3672,7 @@ export class ReimburseBoard {
             pv.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
             const docCell = pv.getCell(`A${item.previewRow}`);
             docCell.value = item.missing
-              ? `附件未同步：${item.name}（${formatBytes(item.size)}）· 请在最初上传该附件的设备重新导出`
+              ? `附件未取回：${item.name}（${formatBytes(item.size)}）· 该附件未成功上传到云端，请让提交人重新添加后再导出`
               : `${item.isImage ? '图片凭证' : '文档附件'}：${item.name}（${formatBytes(item.size)}）· 预览生成失败`;
             docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
             docCell.font = { name: '宋体', size: 9, color: { argb: 'FF6B5330' } };
@@ -4876,7 +4876,7 @@ export class ReimburseBoard {
             preview.mergeCells(`A${item.previewRow}:C${item.previewRow}`);
             const docCell = preview.getCell(`A${item.previewRow}`);
             docCell.value = item.missing
-              ? `附件未同步：${item.name}（${formatBytes(item.size)}）· 请在最初上传该附件的设备重新导出`
+              ? `附件未取回：${item.name}（${formatBytes(item.size)}）· 该附件未成功上传到云端，请让提交人重新添加后再导出`
               : `${item.isImage ? '图片凭证' : '文档附件'}：${item.name}（${formatBytes(item.size)}）· 预览生成失败`;
             docCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF9F6EF' } };
             docCell.font = { name: 'Microsoft YaHei', size: 9, color: { argb: 'FF6B5330' } };

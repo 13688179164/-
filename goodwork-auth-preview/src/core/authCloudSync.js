@@ -240,7 +240,10 @@ export class AuthCloudSync {
     if (!blob) return att;
     const compressed = await compressImage(blob);
     const path = `attachments/${this.user.username}/${taskId}/${att.id}-${Date.now()}.${extOf(att.name, compressed.type)}`;
-    await app.storage.from('tasks').upload(path, compressed);
+    const upRes = await app.storage.from('tasks').upload(path, compressed);
+    if (upRes && upRes.error) {
+      throw new Error(`附件上传失败：${upRes.error.message || upRes.error}`);
+    }
     const fileID = `cos:tasks/${path}`;
     att.cloudFileId = fileID;
     await this.api('attach', {
