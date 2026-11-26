@@ -1,0 +1,114 @@
+[
+  {
+    "id": "GW-RB-34cbf4de",
+    "applicant": "测试V935",
+    "amount": 1122,
+    "department": "维保",
+    "category": "配件",
+    "applied_at": "2026-11-25T22:23:00+08:00",
+    "content": "测试",
+    "status": "pending",
+    "has_invoice": true,
+    "invoice_received": false,
+    "invoice_received_at": null,
+    "reimbursed_at": null,
+    "reimbursed_from": null,
+    "high_value_part": false,
+    "cross_month": null,
+    "stocking_cost": null,
+    "order_num": 1795594154,
+    "cloud_file_ids": [
+      {
+        "id": "att-2e95cd2c",
+        "cloudFileId": "cos:tasks/attachments/att-2e95cd2c-v7vhqb.jpg"
+      }
+    ],
+    "writer_device_id": "4024c024-6d4d-49cc-8f20-e091955a2075",
+    "created_at": "2026-11-25T22:25:04.081+08:00",
+    "updated_at": "2026-11-25T22:25:09.299+08:00"
+  },
+  {
+    "id": "GW-RB-480ecea8",
+    "applicant": "测试2",
+    "amount": 3265,
+    "department": "维保",
+    "category": "配件",
+    "applied_at": "2026-11-26T16:32:00+08:00",
+    "content": ".。",
+    "status": "reimbursed",
+    "has_invoice": true,
+    "invoice_received": false,
+    "invoice_received_at": null,
+    "reimbursed_at": null,
+    "reimbursed_from": null,
+    "high_value_part": true,
+    "cross_month": false,
+    "stocking_cost": false,
+    "order_num": 1795682003,
+    "cloud_file_ids": [
+      {
+        "id": "att-a7568d6b",
+        "cloudFileId": "cos:tasks/attachments/att-a7568d6b-y7jk1e.jpg"
+      }
+    ],
+    "writer_device_id": "bd8d2c67-5dd1-443c-b881-951579446236",
+    "created_at": "2026-11-26T16:33:19.659+08:00",
+    "updated_at": "2026-11-26T16:33:24.035+08:00"
+  },
+  {
+    "id": "GW-RB-573a0a62",
+    "applicant": "李古月",
+    "amount": 1200,
+    "department": "改装",
+    "category": "配件",
+    "applied_at": "2026-11-25T16:09:00+08:00",
+    "content": "改装配件",
+    "status": "pending",
+    "has_invoice": false,
+    "invoice_received": false,
+    "invoice_received_at": null,
+    "reimbursed_at": null,
+    "reimbursed_from": null,
+    "high_value_part": false,
+    "cross_month": null,
+    "stocking_cost": null,
+    "order_num": 1795594164,
+    "cloud_file_ids": [
+      {
+        "id": "att-f6646b14",
+        "cloudFileId": "cos:tasks/attachments/att-f6646b14-x1xajm.jpeg"
+      }
+    ],
+    "writer_device_id": "bd8d2c67-5dd1-443c-b881-951579446236",
+    "created_at": "2026-11-25T16:09:24.302+08:00",
+    "updated_at": "2026-11-25T17:31:03.851+08:00"
+  },
+  {
+    "id": "GW-RB-ed38e416",
+    "applicant": "V934测试",
+    "amount": 222,
+    "department": "维保",
+    "category": "配件",
+    "applied_at": "2026-11-25T17:30:00+08:00",
+    "content": "，，",
+    "status": "pending",
+    "has_invoice": true,
+    "invoice_received": false,
+    "invoice_received_at": null,
+    "reimbursed_at": null,
+    "reimbursed_from": null,
+    "high_value_part": false,
+    "cross_month": null,
+    "stocking_cost": null,
+    "order_num": 1795594164,
+    "cloud_file_ids": [
+      {
+        "id": "att-fd7d3762",
+        "cloudFileId": "cos:tasks/attachments/att-fd7d3762-0wfkwf.jpg"
+      }
+    ],
+    "writer_device_id": "bd8d2c67-5dd1-443c-b881-951579446236",
+    "created_at": "2026-11-25T17:30:59.491+08:00",
+    "updated_at": "2026-11-25T17:31:03.469+08:00"
+  }
+]
