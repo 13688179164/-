@@ -8,6 +8,7 @@ import { resolveEnv } from './env.js?v=20261127v1';
 const ENV = resolveEnv();
 const LS_TASKS = 'goodwork.reimburse.tasks.v3';
 const LS_PROCESSED = 'goodwork.reimburse.processed.v1';
+const LS_PENDING = 'goodwork.reimburse.pendingCreate.v1';
 const POLL_MS = 15000;
 
 // datetime-local 的值没有时区，统一按门店本地时间 +08:00 提交，
@@ -90,6 +91,8 @@ export class AuthCloudSync {
     this._pushQueued = false;
     this._visBound = false;
     this._initialized = false;
+    // 仅保护“本地已新建、尚未被云端确认”的记录；其余云端缺失的记录视为已被删除
+    this._pendingCreates = new Set(readJson(LS_PENDING, []));
   }
 
   isConnected() { return this.connected; }
@@ -211,17 +214,22 @@ export class AuthCloudSync {
       if (!byTask.has(a.task_id)) byTask.set(a.task_id, []);
       byTask.get(a.task_id).push(a);
     }
-    const serverIds = new Set((out.tasks || []).map((t) => t.id));
-    // 🔧 本地刚保存、还没被任何一次成功推送确认过的记录，不能被云端列表直接覆盖丢失
-    // （否则新建后若推送被并发轮询打断，卡片会消失且再也找不回来）
+    const serverTasks = out.tasks || [];
+    const serverIds = new Set(serverTasks.map((t) => t.id));
+    // 云端已出现该 ID = 创建已被确认，移出“待创建”集合
+    for (const id of [...this._pendingCreates]) {
+      if (serverIds.has(id)) this.clearPendingCreate(id);
+    }
+    // 只保护本地新建、云端尚未确认的记录；
+    // 其余“云端缺失”的记录说明已在别的设备被删除，必须从本地移除，否则会一直残留
     const localOnly = this.getState().tasks.filter(
-      (t) => !this._remote.has(t.id) && !serverIds.has(t.id)
+      (t) => !serverIds.has(t.id) && this._pendingCreates.has(t.id)
     );
     const tasks = [
       ...localOnly,
-      ...(out.tasks || []).map((t) => this.mapTask(t, byTask.get(t.id))),
+      ...serverTasks.map((t) => this.mapTask(t, byTask.get(t.id))),
     ].sort((a, b) => (Number(b.order) || 0) - (Number(a.order) || 0));
-    this._remote = new Map((out.tasks || []).map((t) => [t.id, t]));
+    this._remote = new Map(serverTasks.map((t) => [t.id, t]));
     this.applying = true;
     try {
       this.applyState({ tasks, processedEvents: this.getState().processedEvents }, { source: 'cloud', silent });
@@ -241,6 +249,20 @@ export class AuthCloudSync {
         this.onStatus('error', { message: e.message });
       });
     }, 700);
+  }
+
+  markPendingCreate(id) {
+    if (!id) return;
+    this._pendingCreates.add(id);
+    this._persistPendingCreates();
+  }
+
+  clearPendingCreate(id) {
+    if (this._pendingCreates.delete(id)) this._persistPendingCreates();
+  }
+
+  _persistPendingCreates() {
+    try { localStorage.setItem(LS_PENDING, JSON.stringify([...this._pendingCreates])); } catch {}
   }
 
   async uploadAttachment(taskId, att) {
@@ -287,6 +309,9 @@ export class AuthCloudSync {
       for (const t of local) {
         const remote = this._remote.get(t.id);
         if (!remote) {
+          // 只创建“本地新建、尚未上云”的记录；
+          // 其余云端不存在但本地残留的记录是被删除的，不能再次创建（否则会“复活”）
+          if (!this._pendingCreates.has(t.id)) continue;
           try {
             await this.api('create', {
               clientId: t.id,
@@ -301,6 +326,7 @@ export class AuthCloudSync {
             // 上一次推送已创建成功（例如提交阶段失败后重试），不重复报错
             if (!/duplicate|已存在|23505/i.test(createErr?.message || '')) throw createErr;
           }
+          this.clearPendingCreate(t.id);
           await this.uploadTaskAttachments(t);
           try {
             await this.api('submit', { taskId: t.id });
@@ -392,17 +418,20 @@ export class AuthCloudSync {
 
   async cancelTask(taskId) {
     await this.api('cancel', { taskId });
+    this.clearPendingCreate(taskId);
     await this.pullNow({ silent: false });
   }
 
   async removeDraft(taskId) {
     await this.api('remove', { taskId });
+    this.clearPendingCreate(taskId);
     await this.pullNow({ silent: false });
   }
 
   // 管理员删除任意状态的报销记录（成员走 removeDraft / cancelTask）
   async deleteTask(taskId) {
     await this.api('remove', { taskId });
+    this.clearPendingCreate(taskId);
     await this.pullNow({ silent: false });
   }
 

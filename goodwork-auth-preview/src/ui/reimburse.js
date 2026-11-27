@@ -2085,6 +2085,9 @@ export class ReimburseBoard {
         else this.tasks.push(task);
       } else {
         this.tasks.unshift(task);
+        // 标记为“待创建”：只有这类记录在云端暂时缺失时才允许保留/重建，
+        // 避免管理员在别处删除后，本地旧记录又被合并回来或被重新创建
+        if (window.__AUTH_USER__ && this.cloud?.markPendingCreate) this.cloud.markPendingCreate(task.id);
       }
       this.syncProcessed(task, original ? original.status : null);
       this.persistTasks();
